@@ -14,9 +14,9 @@ GAMES = {}
 COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6",
           "#f39c12", "#1abc9c", "#e91e63", "#34495e"]
 
-MAX_PLAYERS = 4
+MAX_PLAYERS = 8
 COOLDOWN = 0.5
-W, H = 800, 800
+W, H = 1400, 1400          # <-- поле больше
 WALL_HP = 4
 WALL_COST = 10
 FARM_COST = 20
@@ -30,14 +30,20 @@ REGEN_AMOUNT = 2
 START_COINS = 500
 EMOTION_COOLDOWN = 6
 
-# === БОНУСЫ ===
 CRATE_HP = 3
-CRATE_RESPAWN = 15        # сек между спавнами ящиков
-MAX_CRATES = 3
-BONUS_SHIELD_TIME = 10    # сек
-BONUS_BIG_BULLETS_TIME = 10  # сек
+CRATE_RESPAWN = 15
+MAX_CRATES = 4
+BONUS_SHIELD_TIME = 10
+BONUS_BIG_BULLETS_TIME = 10
 
-BULLET_DMG = 5            # <-- урон всех пуль 5
+BULLET_DMG = 5
+BULLET_LIFE = 0.6          # <-- пули живут 0.6 сек
+
+# === ЗОНА СЖАТИЯ ===
+ZONE_START_TIME = 60        # через 1 минуту после старта
+ZONE_TICK = 10              # каждые 10 секунд сжимается
+ZONE_DAMAGE = 2             # урон за тик в зоне
+ZONE_STEP = 40              # на сколько пикселей сжимается за раз (по каждой стороне)
 
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 5, "bullets": 1, "cost": 0,   "pierce": False},
@@ -56,8 +62,8 @@ def generate_code():
 
 def get_spawns(count):
     all_positions = [
-        (80, 80), (W - 80, 80), (80, H - 80), (W - 80, H - 80),
-        (W // 2, 80), (W // 2, H - 80), (80, H // 2), (W - 80, H // 2),
+        (150, 150), (W - 150, 150), (150, H - 150), (W - 150, H - 150),
+        (W // 2, 150), (W // 2, H - 150), (150, H // 2), (W - 150, H // 2),
         (W // 3, H // 3), (W * 2 // 3, H // 3),
         (W // 3, H * 2 // 3), (W * 2 // 3, H * 2 // 3),
     ]
@@ -66,15 +72,12 @@ def get_spawns(count):
 
 
 def random_crate_pos():
-    """Случайная позиция для ящика (не в углах спавна)."""
     for _ in range(50):
-        x = random.randint(100, W - 100)
-        y = random.randint(100, H - 100)
-        # выравниваем по сетке 50
+        x = random.randint(200, W - 200)
+        y = random.randint(200, H - 200)
         x = round(x / 50) * 50
         y = round(y / 50) * 50
-        # не слишком близко к краям
-        if 75 < x < W - 75 and 75 < y < H - 75:
+        if 150 < x < W - 150 and 150 < y < H - 150:
             return x, y
     return W // 2, H // 2
 
@@ -109,6 +112,18 @@ def check_crate_collision(game, x, y, exclude_id=None):
     return False
 
 
+def in_zone(game, x, y):
+    """Проверка: точка внутри активной (красной) зоны."""
+    z = game.get("zone")
+    if not z or not z.get("active"):
+        return False
+    left = z["left"]
+    top = z["top"]
+    right = W - z["right"]
+    bottom = H - z["bottom"]
+    return not (left <= x <= right and top <= y <= bottom)
+
+
 def can_act(p):
     now = time.time()
     return (now - p.get("last_action", 0)) >= COOLDOWN
@@ -136,6 +151,7 @@ def new_player_dict(name, idx):
         "ready": False,
         "shield_until": 0,
         "big_bullets_until": 0,
+        "last_zone_damage": 0,
     }
 
 
@@ -167,6 +183,9 @@ def on_create(data):
         "crate_id": 0,
         "last_crate_spawn": time.time(),
         "started": False,
+        "start_time": 0,
+        "zone": {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False},
+        "last_zone_tick": 0,
     }
     GAMES[code]["players"][sid] = new_player_dict(name, 0)
     join_room(code)
@@ -182,6 +201,8 @@ def on_create(data):
         "farm_cost": FARM_COST,
         "wall_cost": WALL_COST,
         "started": False,
+        "world_w": W,
+        "world_h": H,
     })
 
 
@@ -215,6 +236,8 @@ def on_join(data):
         "farm_cost": FARM_COST,
         "wall_cost": WALL_COST,
         "started": False,
+        "world_w": W,
+        "world_h": H,
     })
     emit('player_joined', {
         "sid": sid,
@@ -258,6 +281,9 @@ def on_start_game(data):
             return
 
     game["started"] = True
+    game["start_time"] = time.time()
+    game["zone"] = {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False}
+    game["last_zone_tick"] = 0
     spawns = get_spawns(len(players))
     for i, (sid, p) in enumerate(players.items()):
         p["x"], p["y"] = spawns[i]
@@ -270,8 +296,8 @@ def on_start_game(data):
         p["last_emotion"] = 0
         p["shield_until"] = 0
         p["big_bullets_until"] = 0
+        p["last_zone_damage"] = 0
 
-    # первый ящик сразу
     game["crates"] = {}
     game["crate_id"] = 0
     game["last_crate_spawn"] = time.time()
@@ -281,15 +307,16 @@ def on_start_game(data):
         "walls": game["walls"],
         "farms": game["farms"],
         "crates": game["crates"],
+        "world_w": W,
+        "world_h": H,
+        "start_time": game["start_time"],
     }, to=code)
 
     socketio.start_background_task(passive_loop, code)
 
 
 def spawn_crate(game):
-    """Создать ящик в случайном месте."""
     x, y = random_crate_pos()
-    # не спавним на стене/ферме/другом ящике/игроке
     for _ in range(20):
         if (not check_wall_collision(game, x, y) and
                 not check_farm_collision(game, x, y) and
@@ -298,7 +325,6 @@ def spawn_crate(game):
         x, y = random_crate_pos()
     else:
         return None
-
     game["crate_id"] += 1
     cid = str(game["crate_id"])
     game["crates"][cid] = {
@@ -311,7 +337,6 @@ def spawn_crate(game):
 
 
 def passive_loop(code):
-    """Каждую секунду: доход, реген, фермы, ящики. Только socketio.server.emit!"""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -320,6 +345,36 @@ def passive_loop(code):
         if not g.get("started"):
             return
         now = time.time()
+        elapsed = now - g.get("start_time", now)
+
+        # === ЗОНА СЖАТИЯ ===
+        zone = g["zone"]
+        if elapsed >= ZONE_START_TIME:
+            if not zone["warn"]:
+                zone["warn"] = True
+                zone["active"] = True
+                socketio.server.emit('zone_warning', {}, room=code, namespace='/')
+            # сжатие каждые ZONE_TICK секунд
+            if now - g.get("last_zone_tick", 0) >= ZONE_TICK:
+                g["last_zone_tick"] = now
+                # сжимаем все стороны
+                zone["left"] += ZONE_STEP
+                zone["top"] += ZONE_STEP
+                zone["right"] += ZONE_STEP
+                zone["bottom"] += ZONE_STEP
+                # ограничение: не сжимать до нуля
+                if zone["left"] + zone["right"] >= W - 200:
+                    zone["left"] = (W - 200) // 2
+                    zone["right"] = (W - 200) // 2
+                if zone["top"] + zone["bottom"] >= H - 200:
+                    zone["top"] = (H - 200) // 2
+                    zone["bottom"] = (H - 200) // 2
+                socketio.server.emit('zone_update', {
+                    "left": zone["left"],
+                    "top": zone["top"],
+                    "right": zone["right"],
+                    "bottom": zone["bottom"],
+                }, room=code, namespace='/')
 
         # Пассивный доход
         for sid, p in g["players"].items():
@@ -338,6 +393,57 @@ def passive_loop(code):
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
 
+        # Урон в зоне
+        if zone["active"]:
+            for sid, p in g["players"].items():
+                if p["hp"] <= 0:
+                    continue
+                if in_zone(g, p["x"], p["y"]):
+                    if now - p.get("last_zone_damage", 0) >= 1:
+                        # щит защищает
+                        if now < p.get("shield_until", 0):
+                            p["last_zone_damage"] = now
+                            continue
+                        p["hp"] = max(0, p["hp"] - ZONE_DAMAGE)
+                        p["last_zone_damage"] = now
+                        socketio.server.emit('player_hit', {
+                            "sid": sid, "hp": p["hp"], "zone": True
+                        }, room=code, namespace='/')
+                        if p["hp"] <= 0:
+                            socketio.server.emit('player_died', {
+                                "sid": sid, "killer": None, "zone": True
+                            }, room=code, namespace='/')
+                            alive = [s for s, pl in g["players"].items() if pl["hp"] > 0]
+                            if len(alive) <= 1 and len(g["players"]) > 1:
+                                winner = g["players"].get(alive[0]) if alive else None
+                                socketio.server.emit('game_over', {
+                                    "winner": winner["name"] if winner else "Ничья",
+                                    "sid": alive[0] if alive else None,
+                                }, room=code, namespace='/')
+            # урон постройкам в зоне
+            for wid, w in list(g["walls"].items()):
+                if in_zone(g, w["x"], w["y"]):
+                    w["hp"] -= 1
+                    socketio.server.emit('wall_hit', {
+                        "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
+                    }, room=code, namespace='/')
+                    if w["hp"] <= 0:
+                        del g["walls"][wid]
+                        socketio.server.emit('wall_destroyed', {
+                            "id": wid, "x": w["x"], "y": w["y"],
+                        }, room=code, namespace='/')
+            for fid, f in list(g["farms"].items()):
+                if in_zone(g, f["x"], f["y"]):
+                    f["hp"] -= 1
+                    socketio.server.emit('farm_hit', {
+                        "id": fid, "hp": f["hp"], "x": f["x"], "y": f["y"],
+                    }, room=code, namespace='/')
+                    if f["hp"] <= 0:
+                        del g["farms"][fid]
+                        socketio.server.emit('farm_destroyed', {
+                            "id": fid, "x": f["x"], "y": f["y"],
+                        }, room=code, namespace='/')
+
         # Доход с ферм
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
@@ -347,7 +453,6 @@ def passive_loop(code):
                 owner_sid = farm.get("owner")
                 if owner_sid and owner_sid in g["players"]:
                     g["players"][owner_sid]["coins"] += FARM_INCOME
-                    print(f"[FARM INCOME] farm {fid} -> {g['players'][owner_sid]['name']} +{FARM_INCOME}")
                     socketio.server.emit('farm_income', {
                         "id": fid,
                         "x": farm["x"],
@@ -364,7 +469,6 @@ def passive_loop(code):
             result = spawn_crate(g)
             if result:
                 cid, crate = result
-                print(f"[CRATE SPAWN] {cid} at {crate['x']},{crate['y']} bonus={crate['bonus']}")
                 socketio.server.emit('crate_spawned', {
                     "id": cid,
                     "x": crate["x"],
@@ -375,7 +479,6 @@ def passive_loop(code):
                 }, room=code, namespace='/')
                 g["last_crate_spawn"] = now
 
-        # ВАЖНО: socketio.server.emit
         socketio.server.emit('tick_update', {
             "players": {
                 s: {
@@ -391,6 +494,15 @@ def passive_loop(code):
                 cid: {"hp": c["hp"], "x": c["x"], "y": c["y"], "bonus": c["bonus"]}
                 for cid, c in g["crates"].items() if c["hp"] > 0
             },
+            "zone": {
+                "active": zone["active"],
+                "left": zone["left"],
+                "top": zone["top"],
+                "right": zone["right"],
+                "bottom": zone["bottom"],
+                "warn": zone["warn"],
+            },
+            "elapsed": elapsed,
         }, room=code, namespace='/')
 
 
@@ -539,7 +651,6 @@ def on_place_farm(data):
                 "last_income": time.time(),
             }
             p["coins"] -= FARM_COST
-            print(f"[FARM PLACED] {p['name']} farm {fid} at {wx},{wy}")
             emit('farm_placed', {
                 "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
                 "my_coins": p["coins"],
@@ -613,7 +724,6 @@ def on_hit(data):
             p = game["players"][target_sid]
             if p["hp"] <= 0:
                 break
-            # щит — неуязвим
             if time.time() < p.get("shield_until", 0):
                 emit('player_shielded', {"sid": target_sid}, to=code)
                 break
@@ -689,7 +799,6 @@ def on_hit_crate(data):
             }, to=code)
             if c["hp"] <= 0:
                 bonus = c["bonus"]
-                # выдаём бонус тому, кто сломал
                 if sid in game["players"]:
                     p = game["players"][sid]
                     now = time.time()
