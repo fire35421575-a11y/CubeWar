@@ -221,7 +221,6 @@ def on_start_game(data):
         "players": players,
         "walls": game["walls"],
         "farms": game["farms"],
-        "my_color": "your_color_placeholder",  # не используется
     }, to=code)
 
     socketio.start_background_task(passive_loop, code)
@@ -268,9 +267,18 @@ def passive_loop(code):
                     }, to=code)
                 farm["last_income"] = now
 
-        emit('tick_update', {
-            "players": {s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]} for s, p in g["players"].items()}
-        }, to=code)
+        # каждый игрок получает ТОЛЬКО СВОИ данные + чужое HP
+        for sid in g["players"]:
+            p = g["players"][sid]
+            emit('tick_update', {
+                "my_coins": p["coins"],
+                "my_hp": p["hp"],
+                "my_kills": p["kills"],
+                "others": {
+                    s: {"hp": g["players"][s]["hp"]}
+                    for s in g["players"] if s != sid
+                }
+            }, to=sid)
 
 
 @socketio.on('move')
@@ -314,16 +322,20 @@ def on_place_wall(data):
                 emit('on_cooldown', {}, to=sid)
                 return
             if p["coins"] < WALL_COST:
-                emit('error_msg', {"text": "Мало очков"})
+                emit('error_msg', {"text": f"Нужно {WALL_COST} очков"})
                 return
             wx = p["x"] - p["dir"]["x"] * 50
             wy = p["y"] - p["dir"]["y"] * 50
             wx = max(25, min(W - 25, wx))
             wy = max(25, min(H - 25, wy))
-            for other in game["players"].values():
+            # исключаем СЕБЯ из проверки
+            for other_sid, other in game["players"].items():
+                if other_sid == sid:
+                    continue
                 if other["hp"] <= 0:
                     continue
                 if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
+                    emit('error_msg', {"text": "Тут игрок"})
                     return
             if check_wall_collision(game, wx, wy):
                 return
@@ -336,7 +348,7 @@ def on_place_wall(data):
             mark_action(p)
             emit('wall_placed', {
                 "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
-                "coins": p["coins"],
+                "my_coins": p["coins"],
             }, to=code)
             break
 
@@ -356,7 +368,10 @@ def on_place_farm(data):
             wy = p["y"] - p["dir"]["y"] * 50
             wx = max(40, min(W - 40, wx))
             wy = max(40, min(H - 40, wy))
-            for other in game["players"].values():
+            # исключаем СЕБЯ
+            for other_sid, other in game["players"].items():
+                if other_sid == sid:
+                    continue
                 if other["hp"] <= 0:
                     continue
                 if abs(other["x"] - wx) < 60 and abs(other["y"] - wy) < 60:
@@ -379,7 +394,7 @@ def on_place_farm(data):
             p["coins"] -= FARM_COST
             emit('farm_placed', {
                 "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
-                "coins": p["coins"],
+                "my_coins": p["coins"],
             }, to=code)
             break
 
@@ -406,7 +421,7 @@ def on_upgrade_gun(data):
             emit('gun_upgraded', {
                 "sid": sid,
                 "gun_level": nxt,
-                "coins": p["coins"],
+                "my_coins": p["coins"],
             }, to=code)
             break
 
