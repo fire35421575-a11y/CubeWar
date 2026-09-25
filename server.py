@@ -108,6 +108,23 @@ def on_create(data):
         "farm_id": 0,
         "started": False,
     }
+    # ВАЖНО: добавляем хоста в players
+    GAMES[code]["players"][sid] = {
+        "name": name,
+        "x": 0, "y": 0,
+        "dir": {"x": 1, "y": 0},
+        "hp": 100,
+        "max_hp": 100,
+        "coins": START_COINS,
+        "kills": 0,
+        "gun_level": 0,
+        "color": COLORS[0],
+        "last_action": 0,
+        "last_passive": time.time(),
+        "last_regen": time.time(),
+        "last_emotion": 0,
+        "ready": False,
+    }
     join_room(code)
     emit('joined', {
         "code": code,
@@ -121,7 +138,6 @@ def on_create(data):
         "wall_cost": WALL_COST,
         "started": False,
     })
-
 
 @socketio.on('join_game')
 def on_join(data):
