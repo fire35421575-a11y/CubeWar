@@ -27,16 +27,27 @@ PASSIVE_INCOME = 1
 KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
-START_COINS = 40
+START_COINS = 500
 EMOTION_COOLDOWN = 6
 
+# === БОНУСЫ ===
+CRATE_HP = 3
+CRATE_RESPAWN = 15        # сек между спавнами ящиков
+MAX_CRATES = 3
+BONUS_SHIELD_TIME = 10    # сек
+BONUS_BIG_BULLETS_TIME = 10  # сек
+
+BULLET_DMG = 5            # <-- урон всех пуль 5
+
 GUN_LEVELS = [
-    {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
-    {"name": "Двойной",  "dmg": 15, "bullets": 2, "cost": 15,  "pierce": False},
-    {"name": "Тройной",  "dmg": 15, "bullets": 3, "cost": 30,  "pierce": False},
-    {"name": "Тяжёлый",  "dmg": 25, "bullets": 3, "cost": 60,  "pierce": False},
-    {"name": "Лазер",    "dmg": 20, "bullets": 3, "cost": 120, "pierce": True},
+    {"name": "Пистолет", "dmg": 5, "bullets": 1, "cost": 0,   "pierce": False},
+    {"name": "Двойной",  "dmg": 5, "bullets": 2, "cost": 15,  "pierce": False},
+    {"name": "Тройной",  "dmg": 5, "bullets": 3, "cost": 30,  "pierce": False},
+    {"name": "Тяжёлый",  "dmg": 5, "bullets": 3, "cost": 60,  "pierce": False},
+    {"name": "Лазер",    "dmg": 5, "bullets": 3, "cost": 120, "pierce": True},
 ]
+
+BONUS_TYPES = ["shield", "big_bullets"]
 
 
 def generate_code():
@@ -52,6 +63,20 @@ def get_spawns(count):
     ]
     random.shuffle(all_positions)
     return all_positions[:count]
+
+
+def random_crate_pos():
+    """Случайная позиция для ящика (не в углах спавна)."""
+    for _ in range(50):
+        x = random.randint(100, W - 100)
+        y = random.randint(100, H - 100)
+        # выравниваем по сетке 50
+        x = round(x / 50) * 50
+        y = round(y / 50) * 50
+        # не слишком близко к краям
+        if 75 < x < W - 75 and 75 < y < H - 75:
+            return x, y
+    return W // 2, H // 2
 
 
 def check_wall_collision(game, x, y):
@@ -73,6 +98,17 @@ def check_farm_collision(game, x, y):
     return False
 
 
+def check_crate_collision(game, x, y, exclude_id=None):
+    for cid, crate in game["crates"].items():
+        if crate["hp"] <= 0:
+            continue
+        if cid == exclude_id:
+            continue
+        if abs(crate["x"] - x) < 50 and abs(crate["y"] - y) < 50:
+            return True
+    return False
+
+
 def can_act(p):
     now = time.time()
     return (now - p.get("last_action", 0)) >= COOLDOWN
@@ -80,6 +116,27 @@ def can_act(p):
 
 def mark_action(p):
     p["last_action"] = time.time()
+
+
+def new_player_dict(name, idx):
+    return {
+        "name": name,
+        "x": 0, "y": 0,
+        "dir": {"x": 1, "y": 0},
+        "hp": 100,
+        "max_hp": 100,
+        "coins": START_COINS,
+        "kills": 0,
+        "gun_level": 0,
+        "color": COLORS[idx % len(COLORS)],
+        "last_action": 0,
+        "last_passive": time.time(),
+        "last_regen": time.time(),
+        "last_emotion": 0,
+        "ready": False,
+        "shield_until": 0,
+        "big_bullets_until": 0,
+    }
 
 
 @app.route('/')
@@ -104,27 +161,14 @@ def on_create(data):
         "players": {},
         "walls": {},
         "farms": {},
+        "crates": {},
         "wall_id": 0,
         "farm_id": 0,
+        "crate_id": 0,
+        "last_crate_spawn": time.time(),
         "started": False,
     }
-    # ВАЖНО: добавляем хоста в players
-    GAMES[code]["players"][sid] = {
-        "name": name,
-        "x": 0, "y": 0,
-        "dir": {"x": 1, "y": 0},
-        "hp": 100,
-        "max_hp": 100,
-        "coins": START_COINS,
-        "kills": 0,
-        "gun_level": 0,
-        "color": COLORS[0],
-        "last_action": 0,
-        "last_passive": time.time(),
-        "last_regen": time.time(),
-        "last_emotion": 0,
-        "ready": False,
-    }
+    GAMES[code]["players"][sid] = new_player_dict(name, 0)
     join_room(code)
     emit('joined', {
         "code": code,
@@ -133,11 +177,13 @@ def on_create(data):
         "cooldown": COOLDOWN,
         "walls": {},
         "farms": {},
+        "crates": {},
         "gun_levels": GUN_LEVELS,
         "farm_cost": FARM_COST,
         "wall_cost": WALL_COST,
         "started": False,
     })
+
 
 @socketio.on('join_game')
 def on_join(data):
@@ -155,22 +201,7 @@ def on_join(data):
         emit('error_msg', {"text": "Игра уже началась"})
         return
     idx = len(game["players"])
-    game["players"][sid] = {
-        "name": name,
-        "x": 0, "y": 0,
-        "dir": {"x": 1, "y": 0},
-        "hp": 100,
-        "max_hp": 100,
-        "coins": START_COINS,
-        "kills": 0,
-        "gun_level": 0,
-        "color": COLORS[idx % len(COLORS)],
-        "last_action": 0,
-        "last_passive": time.time(),
-        "last_regen": time.time(),
-        "last_emotion": 0,
-        "ready": False,
-    }
+    game["players"][sid] = new_player_dict(name, idx)
     join_room(code)
     emit('joined', {
         "code": code,
@@ -179,6 +210,7 @@ def on_join(data):
         "cooldown": COOLDOWN,
         "walls": game["walls"],
         "farms": game["farms"],
+        "crates": game["crates"],
         "gun_levels": GUN_LEVELS,
         "farm_cost": FARM_COST,
         "wall_cost": WALL_COST,
@@ -236,18 +268,50 @@ def on_start_game(data):
         p["last_passive"] = time.time()
         p["last_regen"] = time.time()
         p["last_emotion"] = 0
+        p["shield_until"] = 0
+        p["big_bullets_until"] = 0
+
+    # первый ящик сразу
+    game["crates"] = {}
+    game["crate_id"] = 0
+    game["last_crate_spawn"] = time.time()
 
     emit('game_started', {
         "players": players,
         "walls": game["walls"],
         "farms": game["farms"],
+        "crates": game["crates"],
     }, to=code)
 
     socketio.start_background_task(passive_loop, code)
 
 
+def spawn_crate(game):
+    """Создать ящик в случайном месте."""
+    x, y = random_crate_pos()
+    # не спавним на стене/ферме/другом ящике/игроке
+    for _ in range(20):
+        if (not check_wall_collision(game, x, y) and
+                not check_farm_collision(game, x, y) and
+                not check_crate_collision(game, x, y)):
+            break
+        x, y = random_crate_pos()
+    else:
+        return None
+
+    game["crate_id"] += 1
+    cid = str(game["crate_id"])
+    game["crates"][cid] = {
+        "x": x, "y": y,
+        "hp": CRATE_HP,
+        "max_hp": CRATE_HP,
+        "bonus": random.choice(BONUS_TYPES),
+    }
+    return cid, game["crates"][cid]
+
+
 def passive_loop(code):
-    """Каждую секунду: доход, реген, фермы. Только socketio.server.emit!"""
+    """Каждую секунду: доход, реген, фермы, ящики. Только socketio.server.emit!"""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -293,12 +357,40 @@ def passive_loop(code):
                     }, room=code, namespace='/')
                 farm["last_income"] = now
 
-        # ВАЖНО: socketio.server.emit, не socketio.emit
+        # Спавн ящиков
+        alive_crates = [c for c in g["crates"].values() if c["hp"] > 0]
+        if (len(alive_crates) < MAX_CRATES and
+                now - g.get("last_crate_spawn", 0) >= CRATE_RESPAWN):
+            result = spawn_crate(g)
+            if result:
+                cid, crate = result
+                print(f"[CRATE SPAWN] {cid} at {crate['x']},{crate['y']} bonus={crate['bonus']}")
+                socketio.server.emit('crate_spawned', {
+                    "id": cid,
+                    "x": crate["x"],
+                    "y": crate["y"],
+                    "hp": crate["hp"],
+                    "max_hp": crate["max_hp"],
+                    "bonus": crate["bonus"],
+                }, room=code, namespace='/')
+                g["last_crate_spawn"] = now
+
+        # ВАЖНО: socketio.server.emit
         socketio.server.emit('tick_update', {
             "players": {
-                s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]}
+                s: {
+                    "coins": p["coins"],
+                    "hp": p["hp"],
+                    "kills": p["kills"],
+                    "shield_until": p.get("shield_until", 0),
+                    "big_bullets_until": p.get("big_bullets_until", 0),
+                }
                 for s, p in g["players"].items()
-            }
+            },
+            "crates": {
+                cid: {"hp": c["hp"], "x": c["x"], "y": c["y"], "bonus": c["bonus"]}
+                for cid, c in g["crates"].items() if c["hp"] > 0
+            },
         }, room=code, namespace='/')
 
 
@@ -348,6 +440,9 @@ def on_move(data):
             if check_farm_collision(game, nx, ny):
                 emit('error_msg', {"text": "Ферма!"})
                 return
+            if check_crate_collision(game, nx, ny):
+                emit('error_msg', {"text": "Ящик!"})
+                return
             p["x"] = nx
             p["y"] = ny
             p["dir"] = data.get("dir", p["dir"])
@@ -387,6 +482,9 @@ def on_place_wall(data):
             if check_wall_collision(game, wx, wy):
                 return
             if check_farm_collision(game, wx, wy):
+                return
+            if check_crate_collision(game, wx, wy):
+                emit('error_msg', {"text": "Тут ящик"})
                 return
             game["wall_id"] += 1
             wid = str(game["wall_id"])
@@ -428,6 +526,9 @@ def on_place_farm(data):
                 return
             if check_farm_collision(game, wx, wy):
                 emit('error_msg', {"text": "Тут уже ферма"})
+                return
+            if check_crate_collision(game, wx, wy):
+                emit('error_msg', {"text": "Тут ящик"})
                 return
             game["farm_id"] += 1
             fid = str(game["farm_id"])
@@ -486,16 +587,19 @@ def on_shoot(data):
                 return
             lvl = p["gun_level"]
             gun = GUN_LEVELS[lvl]
+            now = time.time()
+            big = now < p.get("big_bullets_until", 0)
             mark_action(p)
             emit('bullet_fired', {
                 "sid": sid,
                 "x": p["x"], "y": p["y"],
                 "dir": p["dir"],
                 "color": p["color"],
-                "dmg": gun["dmg"],
+                "dmg": BULLET_DMG,
                 "bullets": gun["bullets"],
                 "pierce": gun["pierce"],
                 "gun_level": lvl,
+                "big": big,
             }, to=code)
             break
 
@@ -503,11 +607,15 @@ def on_shoot(data):
 @socketio.on('hit')
 def on_hit(data):
     target_sid = data.get("target_sid")
-    dmg = data.get("dmg", 15)
+    dmg = data.get("dmg", BULLET_DMG)
     for code, game in GAMES.items():
         if target_sid in game["players"]:
             p = game["players"][target_sid]
             if p["hp"] <= 0:
+                break
+            # щит — неуязвим
+            if time.time() < p.get("shield_until", 0):
+                emit('player_shielded', {"sid": target_sid}, to=code)
                 break
             p["hp"] = max(0, p["hp"] - dmg)
             emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
@@ -563,6 +671,38 @@ def on_hit_farm(data):
                 emit('farm_destroyed', {
                     "id": fid, "x": f["x"], "y": f["y"],
                 }, to=code)
+            break
+
+
+@socketio.on('hit_crate')
+def on_hit_crate(data):
+    cid = data.get("crate_id")
+    sid = request.sid
+    for code, game in GAMES.items():
+        if cid in game["crates"]:
+            c = game["crates"][cid]
+            if c["hp"] <= 0:
+                break
+            c["hp"] -= 1
+            emit('crate_hit', {
+                "id": cid, "hp": c["hp"], "x": c["x"], "y": c["y"],
+            }, to=code)
+            if c["hp"] <= 0:
+                bonus = c["bonus"]
+                # выдаём бонус тому, кто сломал
+                if sid in game["players"]:
+                    p = game["players"][sid]
+                    now = time.time()
+                    if bonus == "shield":
+                        p["shield_until"] = now + BONUS_SHIELD_TIME
+                    elif bonus == "big_bullets":
+                        p["big_bullets_until"] = now + BONUS_BIG_BULLETS_TIME
+                emit('crate_destroyed', {
+                    "id": cid, "x": c["x"], "y": c["y"],
+                    "bonus": bonus,
+                    "player_sid": sid,
+                }, to=code)
+                del game["crates"][cid]
             break
 
 
