@@ -98,9 +98,48 @@
   .hud .actions { color: #9bb8ff; }
   .hud .timer { color: #f39c12; }
   .hud .hp.low { color: #e74c3c; }
+
+  /* НОВЫЙ РАУНД — баннер */
+  #roundBanner {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.5);
+    background: linear-gradient(135deg, #3a5fcd, #5a7fd8);
+    color: #fff;
+    padding: 24px 40px;
+    border-radius: 16px;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(90,127,216,0.6);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 1000;
+    line-height: 1.4;
+  }
+  #roundBanner.show {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  #roundBanner small {
+    display: block;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    margin-top: 8px;
+    color: #c9d8ff;
+  }
 </style>
 </head>
 <body>
+
+<div id="roundBanner">
+  НОВЫЙ РАУНД
+  <small>+10 ходов</small>
+</div>
 
 <h1>CUBE WAR</h1>
 
@@ -199,6 +238,7 @@
   const gamePlayers = $('gamePlayers'), canvas = $('canvas'), ctx = canvas.getContext('2d');
   const hpView = $('hpView'), actionsView = $('actionsView'), timerView = $('timerView');
   const hpWrap = $('hpWrap');
+  const roundBanner = $('roundBanner');
 
   // автоподстановка имени
   if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
@@ -210,6 +250,14 @@
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(id).classList.add('active');
+  }
+
+  function showRoundBanner() {
+    roundBanner.classList.add('show');
+    haptic('hit');
+    setTimeout(() => {
+      roundBanner.classList.remove('show');
+    }, 2000);
   }
 
   function connect() {
@@ -257,11 +305,8 @@
         color: data.color, owner: data.sid, steps: 0,
       });
       spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 5);
-      // обновить действия стрелявшего
       const p = players[data.sid];
-      if (p && data.actions_left !== undefined) {
-        p.actions_left = data.actions_left;
-      }
+      if (p && data.actions_left !== undefined) p.actions_left = data.actions_left;
       updateHUD();
     });
 
@@ -323,9 +368,12 @@
       roundActive = true;
       timeLeft = data.round_time;
       actionsPerRound = data.actions_per_round;
+      // обновляем действия всем
       Object.values(players).forEach(p => {
         if (p.hp > 0) p.actions_left = actionsPerRound;
       });
+      // показываем баннер
+      showRoundBanner();
       startTimer();
       showScreen('gameScreen');
       updateHUD();
@@ -355,7 +403,6 @@
     });
 
     socket.on('no_actions', () => {
-      // визуально показать, что действий нет
       if (actionsView) {
         actionsView.style.color = '#e74c3c';
         setTimeout(() => { actionsView.style.color = ''; }, 500);
@@ -464,7 +511,6 @@
     hitFlashes.push({ x, y, life: 1, radius: 10 });
   }
 
-  // === ФОН — БЕЛЫЙ ===
   function drawGrid() {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
@@ -478,47 +524,35 @@
     }
   }
 
-  // === КУБИК С ДУЛОМ ===
   function drawCube(p, isMe) {
     if (p.alive === false) return;
     const x = p.x - HALF, y = p.y - HALF;
 
-    // тень
     ctx.fillStyle = 'rgba(0,0,0,0.2)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
 
-    // тело кубика
     const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
     grad.addColorStop(0, lighten(p.color, 20));
     grad.addColorStop(1, darken(p.color, 30));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, CUBE, CUBE);
 
-    // обводка
     ctx.strokeStyle = isMe ? '#000' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
 
-    // ДУЛО — ствол, смотрящий в сторону направления
+    // ДУЛО
     const dx = p.dir.x, dy = p.dir.y;
     const barrelLen = 26;
     const barrelW = 12;
-    const bx = p.x;
-    const by = p.y;
-
     ctx.save();
-    ctx.translate(bx, by);
-    // поворот по направлению
+    ctx.translate(p.x, p.y);
     const angle = Math.atan2(dy, dx);
     ctx.rotate(angle);
-
-    // ствол
     ctx.fillStyle = darken(p.color, 50);
     ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
-    // кончик ствола (яркий)
     ctx.fillStyle = '#222';
     ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
-
     ctx.restore();
 
     // HP бар
@@ -532,7 +566,6 @@
     ctx.fillStyle = hpColor;
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW * ratio, hpH);
 
-    // ник + действия
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     const label = `${p.name}  ⚡${p.actions_left || 0}`;
@@ -543,25 +576,21 @@
     ctx.fillText(label, p.x, p.y - HALF - 26);
   }
 
-  // === СТЕНЫ ===
   function drawWalls() {
     for (const wid in walls) {
       const w = walls[wid];
       const x = w.x - WALL_SIZE / 2, y = w.y - WALL_SIZE / 2;
       const hpRatio = Math.max(0, w.hp / 4);
 
-      // тень
       ctx.fillStyle = 'rgba(0,0,0,0.2)';
       ctx.fillRect(x + 3, y + 3, WALL_SIZE, WALL_SIZE);
 
-      // тело
       const grad = ctx.createLinearGradient(x, y, x + WALL_SIZE, y + WALL_SIZE);
       grad.addColorStop(0, '#7a8fb8');
       grad.addColorStop(1, '#4a5f88');
       ctx.fillStyle = grad;
       ctx.fillRect(x, y, WALL_SIZE, WALL_SIZE);
 
-      // кирпичики
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
       for (let i = 1; i < 3; i++) {
@@ -577,12 +606,10 @@
       ctx.lineTo(x + WALL_SIZE / 2, y + WALL_SIZE);
       ctx.stroke();
 
-      // обводка — цвет по HP
       ctx.strokeStyle = hpRatio > 0.5 ? '#2c3e50' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, WALL_SIZE, WALL_SIZE);
 
-      // трещины
       if (hpRatio < 0.75) {
         ctx.strokeStyle = 'rgba(0,0,0,0.6)';
         ctx.lineWidth = 1.5;
@@ -608,7 +635,6 @@
     }
   }
 
-  // === ПУЛИ ===
   function drawBullets() {
     bullets.forEach(b => {
       const tailX = b.x - b.dx * 20;
@@ -706,7 +732,6 @@
     drawFlashes();
   }
 
-  // === ЦВЕТА ===
   function lighten(color, percent) {
     const num = parseInt(color.replace('#',''), 16);
     let r = Math.min(255, (num >> 16) + percent);
@@ -716,7 +741,6 @@
   }
   function darken(color, percent) { return lighten(color, -percent); }
 
-  // === ДВИЖЕНИЕ ===
   function move(dir) {
     if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) {
       if (me && me.actions_left <= 0) haptic('light');
@@ -784,7 +808,6 @@
     else if (e.key === 'e' || e.key === 'E') { document.getElementById('wallBtn').click(); }
   });
 
-  // === ПУЛИ ===
   function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
