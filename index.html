@@ -61,10 +61,12 @@
     gap: 8px; margin-top: 10px;
   }
   .btn {
+    position: relative;
     background: #1c1c26; border: 1px solid #2e2e3c; border-radius: 12px;
     color: #e8e8f0; font-size: 22px; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     user-select: none; transition: 0.1s; font-weight: 600;
+    overflow: hidden;
   }
   .btn:active { background: #252533; transform: scale(0.94); }
   .btn:disabled { opacity: 0.35; cursor: default; }
@@ -80,6 +82,28 @@
   .btn-farm:active { background: #5a9a6a; }
   .btn-gun   { grid-column: 5; grid-row: 2; background: #8a5a4a; font-size: 18px; }
   .btn-gun:active { background: #9a6a5a; }
+
+  /* круговая перезарядка на кнопках */
+  .btn .cd-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 12px;
+    pointer-events: none;
+    background: conic-gradient(rgba(0,0,0,0.7) 0deg, transparent 0deg);
+    transition: background 0.08s linear;
+  }
+  .btn .cd-num {
+    position: absolute;
+    bottom: 4px;
+    right: 6px;
+    font-size: 10px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 1px 2px #000;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .btn.recharging .cd-num { opacity: 1; }
 
   .players-bar {
     display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0;
@@ -97,7 +121,7 @@
     display: flex; gap: 12px; margin: 8px 0; font-size: 13px;
     font-weight: 700; align-items: center; padding: 8px 14px;
     background: #1c1c26; border-radius: 10px; border: 1px solid #2e2e3c;
-    min-width: 380px; justify-content: center;
+    min-width: 380px; justify-content: center; flex-wrap: wrap;
   }
   .hud .hp { color: #2ecc71; }
   .hud .hp.low { color: #e74c3c; }
@@ -105,6 +129,8 @@
   .hud .kills { color: #e74c3c; }
   .hud .cd { color: #f39c12; min-width: 70px; text-align: center; }
   .hud .cd.ready { color: #2ecc71; }
+  .hud .shield-indicator { color: #00e0ff; }
+  .hud .big-indicator { color: #ff8800; }
 
   #winBanner {
     position: fixed; top: 50%; left: 50%;
@@ -216,6 +242,36 @@
     display: none;
   }
   #emotionCooldownText.show { display: block; }
+
+  /* Бонусы у игрока */
+  #bonusIndicators {
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 400;
+    pointer-events: none;
+  }
+  .bonus-badge {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #fff;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid #fff;
+    text-shadow: 0 1px 2px #000;
+  }
+  .bonus-badge.shield {
+    background: rgba(0,180,255,0.85);
+    box-shadow: 0 0 16px rgba(0,180,255,0.8);
+  }
+  .bonus-badge.big {
+    background: rgba(255,140,0,0.85);
+    box-shadow: 0 0 16px rgba(255,140,0,0.8);
+  }
 </style>
 </head>
 <body>
@@ -250,16 +306,18 @@
     <span class="coins">💰 <span id="coinsView">500</span></span>
     <span class="kills">💀 <span id="killsView">0</span></span>
     <span class="cd ready" id="cdView">КД: 0.0</span>
+    <span class="shield-indicator" id="shieldInd" style="display:none;">🛡 <span id="shieldTime">0</span></span>
+    <span class="big-indicator" id="bigInd" style="display:none;">🔵 <span id="bigTime">0</span></span>
   </div>
   <canvas id="canvas" width="800" height="800"></canvas>
   <div class="controls">
-    <button class="btn btn-farm" id="farmBtn">🏭</button>
-    <button class="btn btn-wall" id="wallBtn">▩</button>
+    <button class="btn btn-farm" id="farmBtn">🏭<div class="cd-ring"></div><div class="cd-num"></div></button>
+    <button class="btn btn-wall" id="wallBtn">▩<div class="cd-ring"></div><div class="cd-num"></div></button>
     <button class="btn btn-up" data-dir="up">↑</button>
     <button class="btn btn-left" data-dir="left">←</button>
     <button class="btn btn-down" data-dir="down">↓</button>
     <button class="btn btn-right" data-dir="right">→</button>
-    <button class="btn btn-shoot" id="shootBtn">◆</button>
+    <button class="btn btn-shoot" id="shootBtn">◆<div class="cd-ring"></div><div class="cd-num"></div></button>
     <button class="btn btn-gun" id="gunBtn">🔫</button>
   </div>
 </div>
@@ -277,6 +335,7 @@
 </div>
 <div id="emotionCooldownBar"></div>
 <div id="emotionCooldownText"></div>
+<div id="bonusIndicators"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
@@ -294,6 +353,7 @@
       if (type === 'shot') tg.HapticFeedback.impactOccurred('heavy');
       else if (type === 'hit') tg.HapticFeedback.notificationOccurred('success');
       else if (type === 'emotion') tg.HapticFeedback.notificationOccurred('success');
+      else if (type === 'bonus') tg.HapticFeedback.notificationOccurred('success');
       else tg.HapticFeedback.impactOccurred('light');
     } catch(e) {}
   }
@@ -302,10 +362,13 @@
   const W = 800, H = 800;
   const CUBE = 50, HALF = CUBE / 2;
   const STEP = 50, ANIM = 6;
-  const BULLET_STEP = 30, BULLET_MAX = 30;
+  const BULLET_STEP = 30;
+  const BULLET_LIFE = 1.5;           // <-- пуля живёт 1.5 сек
+  const BULLET_MAX_STEPS = Math.ceil(BULLET_LIFE * 1000 / 30) + 5;
   const WALL_SIZE = 50;
   const EMOTION_CD = 6;
   const EMOTION_LIFE = 3;
+  const CRATE_SIZE = 50;
 
   // ==== СОСТОЯНИЕ ====
   let socket = null;
@@ -319,6 +382,7 @@
   let myKills = 0;
   let walls = {};
   let farms = {};
+  let crates = {};
   let GUN_LEVELS = [];
   let FARM_COST = 20;
   let WALL_COST = 10;
@@ -331,9 +395,11 @@
   let hitFlashes = [];
   let wallFragments = [];
   let floatingTexts = [];
-  let activeEmotions = []; // {x, y, emoji, life, rotation}
+  let activeEmotions = [];
   let moving = false;
   let gameStarted = false;
+  let myShieldUntil = 0;
+  let myBigBulletsUntil = 0;
 
   const $ = id => document.getElementById(id);
   const menuScreen = $('menuScreen'), lobbyScreen = $('lobbyScreen'), gameScreen = $('gameScreen');
@@ -350,8 +416,10 @@
   const emotionPanel = $('emotionPanel');
   const emotionCooldownBar = $('emotionCooldownBar');
   const emotionCooldownText = $('emotionCooldownText');
+  const shieldInd = $('shieldInd'), shieldTime = $('shieldTime');
+  const bigInd = $('bigInd'), bigTime = $('bigTime');
+  const bonusIndicators = $('bonusIndicators');
 
-  // Автозаполнение имени
   if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
     const u = tg.initDataUnsafe.user;
     const name = u.first_name || u.username || '';
@@ -371,20 +439,50 @@
     return (performance.now() - lastAction) / 1000 >= COOLDOWN;
   }
 
+  // ==== КРУГОВАЯ ПЕРЕЗАРЯДКА НА КНОПКАХ ====
   function updateCD() {
     const elapsed = (performance.now() - lastAction) / 1000;
     const left = Math.max(0, COOLDOWN - elapsed);
+    const progress = 1 - left / COOLDOWN;
+
     if (left > 0) {
       cdView.textContent = 'КД: ' + left.toFixed(1);
       cdView.classList.remove('ready');
-      document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+      document.querySelectorAll('.btn').forEach(b => {
+        if (b.id === 'farmBtn' || b.id === 'wallBtn' || b.id === 'shootBtn') {
+          b.disabled = true;
+          b.classList.add('recharging');
+          const ring = b.querySelector('.cd-ring');
+          const num = b.querySelector('.cd-num');
+          if (ring) ring.style.background =
+            `conic-gradient(rgba(0,0,0,0.7) ${progress * 360}deg, transparent ${progress * 360}deg)`;
+          if (num) num.textContent = left.toFixed(1);
+        }
+      });
     } else {
       cdView.textContent = 'КД: 0.0';
       cdView.classList.add('ready');
-      document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+      document.querySelectorAll('.btn').forEach(b => {
+        b.disabled = false;
+        b.classList.remove('recharging');
+        const ring = b.querySelector('.cd-ring');
+        if (ring) ring.style.background = 'transparent';
+      });
     }
   }
-  setInterval(updateCD, 80);
+  setInterval(updateCD, 50);
+
+  // ==== ТАЙМЕРЫ БОНУСОВ ====
+  function updateBonusTimers() {
+    const now = Date.now() / 1000;
+    const shieldLeft = Math.max(0, myShieldUntil - now);
+    const bigLeft = Math.max(0, myBigBulletsUntil - now);
+    shieldInd.style.display = shieldLeft > 0 ? 'inline' : 'none';
+    shieldTime.textContent = shieldLeft.toFixed(1);
+    bigInd.style.display = bigLeft > 0 ? 'inline' : 'none';
+    bigTime.textContent = bigLeft.toFixed(1);
+  }
+  setInterval(updateBonusTimers, 100);
 
   function updateEmotionCooldown() {
     const now = Date.now();
@@ -420,6 +518,7 @@
       players = data.players;
       walls = data.walls || {};
       farms = data.farms || {};
+      crates = data.crates || {};
       GUN_LEVELS = data.gun_levels || [];
       FARM_COST = data.farm_cost || 20;
       WALL_COST = data.wall_cost || 10;
@@ -429,6 +528,8 @@
         myCoins = me.coins;
         myHp = me.hp;
         myKills = me.kills;
+        myShieldUntil = me.shield_until || 0;
+        myBigBulletsUntil = me.big_bullets_until || 0;
       }
       roomCodeEl.textContent = roomCode;
       showScreen('lobbyScreen');
@@ -456,11 +557,14 @@
       players = data.players;
       walls = data.walls || {};
       farms = data.farms || {};
+      crates = data.crates || {};
       me = players[mySid];
       if (me) {
         myCoins = me.coins;
         myHp = me.hp;
         myKills = me.kills;
+        myShieldUntil = me.shield_until || 0;
+        myBigBulletsUntil = me.big_bullets_until || 0;
       }
       gameStarted = true;
       updateHUD();
@@ -477,17 +581,31 @@
             if (data.players[sid].kills !== undefined) {
               players[sid].kills = data.players[sid].kills;
             }
+            players[sid].shield_until = data.players[sid].shield_until || 0;
+            players[sid].big_bullets_until = data.players[sid].big_bullets_until || 0;
           }
         }
         if (me && players[mySid]) {
           myCoins = players[mySid].coins;
           myHp = players[mySid].hp;
           myKills = players[mySid].kills;
+          myShieldUntil = players[mySid].shield_until || 0;
+          myBigBulletsUntil = players[mySid].big_bullets_until || 0;
           me.coins = myCoins;
           me.hp = myHp;
           me.kills = myKills;
+          me.shield_until = myShieldUntil;
+          me.big_bullets_until = myBigBulletsUntil;
         }
         updateHUD();
+      }
+      if (data.crates) {
+        // обновляем существующие
+        for (const cid in data.crates) {
+          if (crates[cid]) {
+            crates[cid].hp = data.crates[cid].hp;
+          }
+        }
       }
     });
 
@@ -503,18 +621,32 @@
       const count = data.bullets || 1;
       const baseAngle = Math.atan2(data.dir.y, data.dir.x);
       const spread = 0.15;
+      const isBig = !!data.big;
       for (let i = 0; i < count; i++) {
         const offset = (i - (count - 1) / 2) * spread;
         const a = baseAngle + offset;
         bullets.push({
           x: data.x, y: data.y,
           dx: Math.cos(a), dy: Math.sin(a),
-          color: data.color, owner: data.sid, steps: 0,
-          dmg: data.dmg, pierce: data.pierce,
+          color: data.color, owner: data.sid,
+          age: 0,
+          dmg: data.dmg || 5,
+          pierce: data.pierce,
+          big: isBig,
+          radius: isBig ? 12 : 6,
+          tailLen: isBig ? 36 : 22,
           hit_targets: [],
         });
       }
-      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 6);
+      // анимация выстрела — вспышка у ствола
+      spawnMuzzleFlash(
+        data.x + data.dir.x * 30,
+        data.y + data.dir.y * 30,
+        data.color,
+        data.dir,
+        isBig
+      );
+      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, isBig ? 14 : 8);
     });
 
     socket.on('player_hit', (data) => {
@@ -532,6 +664,23 @@
       haptic('hit');
       render();
       updateHUD();
+    });
+
+    socket.on('player_shielded', (data) => {
+      const p = players[data.sid];
+      if (p) {
+        // эффект "отскока"
+        for (let i = 0; i < 12; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 3 + Math.random() * 3;
+          particles.push({
+            x: p.x, y: p.y,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            life: 1, color: '#00e0ff', size: 3 + Math.random() * 3,
+          });
+        }
+      }
+      if (data.sid === mySid) haptic('hit');
     });
 
     socket.on('player_died', (data) => {
@@ -631,6 +780,70 @@
       }
     });
 
+    // ==== ЯЩИКИ ====
+    socket.on('crate_spawned', (data) => {
+      crates[data.id] = {
+        x: data.x, y: data.y,
+        hp: data.hp, max_hp: data.max_hp || 3,
+        bonus: data.bonus,
+        spawnAnim: 1.0,
+      };
+      // красивое появление
+      for (let i = 0; i < 20; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 2 + Math.random() * 4;
+        particles.push({
+          x: data.x, y: data.y,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          life: 1, color: '#ffd700', size: 3 + Math.random() * 3,
+        });
+      }
+      render();
+    });
+
+    socket.on('crate_hit', (data) => {
+      if (crates[data.id]) {
+        crates[data.id].hp = data.hp;
+        crates[data.id].hitFlash = 1.0;
+      }
+      spawnParticles(data.x, data.y, '#c08040', 6);
+      render();
+    });
+
+    socket.on('crate_destroyed', (data) => {
+      if (crates[data.id]) delete crates[data.id];
+      // взрыв ящика
+      for (let i = 0; i < 30; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 3 + Math.random() * 6;
+        wallFragments.push({
+          x: data.x, y: data.y,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          life: 1, size: 5 + Math.random() * 6,
+          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.4,
+          color: '#8b5a2b',
+        });
+      }
+      spawnFlash(data.x, data.y);
+      if (data.bonus === 'shield') {
+        floatingTexts.push({
+          x: data.x, y: data.y - 30,
+          text: '🛡 ЩИТ!',
+          color: '#00e0ff',
+          life: 2, vy: -1.0,
+        });
+      } else if (data.bonus === 'big_bullets') {
+        floatingTexts.push({
+          x: data.x, y: data.y - 30,
+          text: '🔵 БОЛЬШИЕ ПУЛИ!',
+          color: '#ff8800',
+          life: 2, vy: -1.0,
+        });
+      }
+      if (data.player_sid === mySid) haptic('bonus');
+      render();
+    });
+
     socket.on('gun_upgraded', (data) => {
       if (data.sid === mySid) {
         if (data.my_coins !== undefined) myCoins = data.my_coins;
@@ -662,7 +875,6 @@
         rotation: 0,
         scale: 0,
       });
-      // звук/вибруха только для своей эмоции
       if (data.sid === mySid) haptic('emotion');
     });
 
@@ -814,6 +1026,25 @@
     hitFlashes.push({ x, y, life: 1, radius: 10 });
   }
 
+  // вспышка у ствола при выстреле
+  function spawnMuzzleFlash(x, y, color, dir, big) {
+    const count = big ? 12 : 7;
+    const baseAngle = Math.atan2(dir.y, dir.x);
+    for (let i = 0; i < count; i++) {
+      const angle = baseAngle + (Math.random() - 0.5) * 0.8;
+      const speed = 3 + Math.random() * 5;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.7, color,
+        size: big ? 4 + Math.random() * 3 : 2 + Math.random() * 3,
+      });
+    }
+    // яркая вспышка
+    hitFlashes.push({ x, y, life: 0.5, radius: 6 });
+  }
+
   // ==== РИСОВАНИЕ ====
   function drawGrid() {
     ctx.fillStyle = '#ffffff';
@@ -831,6 +1062,8 @@
   function drawCube(p, isMe) {
     if (p.alive === false) return;
     const x = p.x - HALF, y = p.y - HALF;
+    const now = Date.now() / 1000;
+    const shielded = (p.shield_until || 0) > now;
 
     ctx.fillStyle = 'rgba(0,0,0,0.2)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
@@ -845,15 +1078,17 @@
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
 
+    // ствол
     const lvl = p.gun_level || 0;
     const barrelLen = 22 + lvl * 5;
     const barrelW = 10 + lvl * 2;
+    const big = (p.big_bullets_until || 0) > now;
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(Math.atan2(p.dir.y, p.dir.x));
     ctx.fillStyle = darken(p.color, 50);
     ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
-    ctx.fillStyle = lvl >= 4 ? '#00e0ff' : '#222';
+    ctx.fillStyle = big ? '#ff8800' : (lvl >= 4 ? '#00e0ff' : '#222');
     ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
     if (lvl >= 3) {
       ctx.fillStyle = darken(p.color, 40);
@@ -862,6 +1097,32 @@
     }
     ctx.restore();
 
+    // энергетический шар (щит)
+    if (shielded) {
+      const t = now * 4;
+      const pulse = 1 + Math.sin(t) * 0.08;
+      const radius = (CUBE / 2 + 18) * pulse;
+      const shieldGrad = ctx.createRadialGradient(p.x, p.y, radius * 0.4, p.x, p.y, radius);
+      shieldGrad.addColorStop(0, 'rgba(0,224,255,0.05)');
+      shieldGrad.addColorStop(0.7, 'rgba(0,180,255,0.25)');
+      shieldGrad.addColorStop(1, 'rgba(0,224,255,0.6)');
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = shieldGrad;
+      ctx.fill();
+      ctx.strokeStyle = '#00e0ff';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      // кольцо пульсации
+      const ringR = (CUBE / 2 + 18) + ((t * 20) % 20);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0,224,255,${1 - ((t * 20) % 20) / 20})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // HP
     const hpW = 54, hpH = 7;
     const curHp = isMe ? myHp : p.hp;
     const ratio = Math.max(0, (curHp || 100) / 100);
@@ -908,16 +1169,6 @@
       ctx.strokeStyle = hpRatio > 0.5 ? '#2c3e50' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, WALL_SIZE, WALL_SIZE);
-
-      if (hpRatio < 0.5) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(x + 10, y + 5);
-        ctx.lineTo(x + 20, y + 25);
-        ctx.lineTo(x + 15, y + 40);
-        ctx.stroke();
-      }
     }
   }
 
@@ -980,10 +1231,110 @@
     }
   }
 
+  // ==== ЯЩИКИ ====
+  function drawCrates() {
+    const now = performance.now() / 1000;
+    for (const cid in crates) {
+      const c = crates[cid];
+      if (c.hp <= 0) continue;
+      const x = c.x, y = c.y;
+      const half = CRATE_SIZE / 2;
+
+      // анимация появления
+      let scale = 1;
+      if (c.spawnAnim > 0) {
+        scale = 1 + Math.sin((1 - c.spawnAnim) * Math.PI) * 0.3;
+        c.spawnAnim -= 0.025;
+        if (c.spawnAnim < 0) c.spawnAnim = 0;
+      }
+
+      // анимация попадания
+      let shakeX = 0, shakeY = 0;
+      if (c.hitFlash > 0) {
+        shakeX = (Math.random() - 0.5) * 6;
+        shakeY = (Math.random() - 0.5) * 6;
+        c.hitFlash -= 0.08;
+        if (c.hitFlash < 0) c.hitFlash = 0;
+      }
+
+      ctx.save();
+      ctx.translate(x + shakeX, y + shakeY);
+      ctx.scale(scale, scale);
+
+      // тень
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillRect(-half + 4, -half + 4, CRATE_SIZE, CRATE_SIZE);
+
+      // корпус ящика (дерево)
+      const grad = ctx.createLinearGradient(-half, -half, half, half);
+      grad.addColorStop(0, '#c08040');
+      grad.addColorStop(1, '#7a4a1a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
+
+      // обводка
+      ctx.strokeStyle = '#4a2a0a';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
+
+      // крест (доски)
+      ctx.strokeStyle = 'rgba(60,30,10,0.7)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-half + 5, -half + 5);
+      ctx.lineTo(half - 5, half - 5);
+      ctx.moveTo(half - 5, -half + 5);
+      ctx.lineTo(-half + 5, half - 5);
+      ctx.stroke();
+
+      // гвозди
+      ctx.fillStyle = '#3a1a05';
+      const nails = [[-half+6,-half+6],[half-6,-half+6],[-half+6,half-6],[half-6,half-6]];
+      nails.forEach(([nx, ny]) => {
+        ctx.beginPath();
+        ctx.arc(nx, ny, 2, 0, Math.PI*2);
+        ctx.fill();
+      });
+
+      // иконка бонуса (мерцает)
+      const pulse = 0.7 + Math.sin(now * 4) * 0.3;
+      ctx.globalAlpha = pulse;
+      ctx.font = 'bold 22px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      if (c.bonus === 'shield') {
+        ctx.fillStyle = '#00e0ff';
+        ctx.shadowColor = '#00e0ff';
+        ctx.shadowBlur = 12;
+        ctx.fillText('🛡', 0, 0);
+      } else if (c.bonus === 'big_bullets') {
+        ctx.fillStyle = '#ff8800';
+        ctx.shadowColor = '#ff8800';
+        ctx.shadowBlur = 12;
+        ctx.fillText('🔵', 0, 0);
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+
+      // HP ящика
+      const hpW = 44, hpH = 5;
+      const hpRatio = Math.max(0, c.hp / (c.max_hp || 3));
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(-hpW/2 - 1, half + 5, hpW + 2, hpH + 2);
+      ctx.fillStyle = '#111';
+      ctx.fillRect(-hpW/2, half + 6, hpW, hpH);
+      ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
+      ctx.fillRect(-hpW/2, half + 6, hpW * hpRatio, hpH);
+
+      ctx.restore();
+    }
+  }
+
+  // ==== ПУЛИ (с новым поведением) ====
   function drawBullets() {
     bullets.forEach(b => {
-      const tailX = b.x - b.dx * 20;
-      const tailY = b.y - b.dy * 20;
+      const tailX = b.x - b.dx * b.tailLen;
+      const tailY = b.y - b.dy * b.tailLen;
       const grad = ctx.createLinearGradient(tailX, tailY, b.x, b.y);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
       grad.addColorStop(1, b.color);
@@ -991,23 +1342,26 @@
       ctx.moveTo(tailX, tailY);
       ctx.lineTo(b.x, b.y);
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 6;
+      ctx.lineWidth = b.big ? 12 : 6;
+      ctx.lineCap = 'round';
       ctx.stroke();
 
+      // свечение
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 14, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
-      ctx.globalAlpha = 0.2;
+      ctx.arc(b.x, b.y, b.radius * 2.3, 0, Math.PI * 2);
+      ctx.fillStyle = b.big ? 'rgba(255,140,0,0.3)' : b.color;
+      ctx.globalAlpha = 0.25;
       ctx.fill();
       ctx.globalAlpha = 1;
 
+      // ядро
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = b.pierce ? '#00e0ff' : '#fff';
+      ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+      ctx.fillStyle = b.big ? '#ffaa33' : (b.pierce ? '#00e0ff' : '#fff');
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
+      ctx.arc(b.x, b.y, b.radius * 0.65, 0, Math.PI * 2);
+      ctx.fillStyle = b.big ? '#fff' : b.color;
       ctx.fill();
     });
   }
@@ -1081,13 +1435,10 @@
     }
   }
 
-  // ==== ЭМОЦИИ (рисование) ====
   function drawEmotions() {
     for (let i = activeEmotions.length - 1; i >= 0; i--) {
       const e = activeEmotions[i];
-      // прогресс жизни 1 → 0
       const progress = e.life / EMOTION_LIFE;
-      // scale: сначала вырастает, потом держится, потом чуть уменьшается
       let scale;
       if (progress > 0.8) {
         scale = (1 - progress) / 0.2 * 1.3;
@@ -1096,11 +1447,8 @@
       } else {
         scale = progress / 0.2 * 1.3;
       }
-      // вращение: полный круг за время жизни
       e.rotation += 0.08;
-      // y: медленно поднимается
       const yOffset = -60 * (1 - progress) * 0.5;
-
       ctx.save();
       ctx.translate(e.x, e.y + yOffset);
       ctx.rotate(e.rotation);
@@ -1108,13 +1456,11 @@
       ctx.font = '48px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      // тень
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
       ctx.shadowBlur = 8;
       ctx.globalAlpha = Math.min(1, progress * 1.5);
       ctx.fillText(e.emoji, 0, 0);
       ctx.restore();
-
       e.life -= 0.02;
       if (e.life <= 0) activeEmotions.splice(i, 1);
     }
@@ -1124,6 +1470,7 @@
     drawGrid();
     drawFarms();
     drawWalls();
+    drawCrates();
     for (const sid in players) {
       if (sid === mySid) continue;
       drawCube(players[sid], false);
@@ -1194,7 +1541,6 @@
     lastAction = performance.now();
     updateCD();
     socket.emit('shoot', {});
-    spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
   });
 
   $('wallBtn').addEventListener('click', () => {
@@ -1230,44 +1576,66 @@
     else if (e.key === 'f' || e.key === 'F') { emotionBtn.click(); }
   });
 
-  // ==== ПУЛИ ====
-  function updateBullets() {
+  // ==== ПУЛИ (обновление) ====
+  function updateBullets(dt) {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.dx * BULLET_STEP;
       b.y += b.dy * BULLET_STEP;
-      b.steps++;
+      b.age += 0.03; // ~30fps
 
-      if (b.steps % 2 === 0) {
+      // хвост
+      if (Math.random() < 0.7) {
         particles.push({
           x: b.x, y: b.y,
           vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2,
-          life: 0.5, color: b.color, size: 2,
+          life: b.big ? 0.8 : 0.5,
+          color: b.big ? '#ffaa33' : b.color,
+          size: b.big ? 3 : 2,
         });
       }
 
       let hitSomething = false;
 
+      // стены
       for (const wid in walls) {
         const w = walls[wid];
         if (Math.abs(w.x - b.x) < 25 && Math.abs(w.y - b.y) < 25) {
           socket.emit('hit_wall', { wall_id: wid });
+          spawnParticles(b.x, b.y, '#8fa8d8', 8);
           if (!b.pierce) hitSomething = true;
           break;
         }
       }
 
+      // фермы
       if (!hitSomething) {
         for (const fid in farms) {
           const f = farms[fid];
           if (Math.abs(f.x - b.x) < 30 && Math.abs(f.y - b.y) < 30) {
             socket.emit('hit_farm', { farm_id: fid });
+            spawnParticles(b.x, b.y, '#d4a017', 8);
             if (!b.pierce) hitSomething = true;
             break;
           }
         }
       }
 
+      // ящики
+      if (!hitSomething) {
+        for (const cid in crates) {
+          const c = crates[cid];
+          if (c.hp <= 0) continue;
+          if (Math.abs(c.x - b.x) < 28 && Math.abs(c.y - b.y) < 28) {
+            socket.emit('hit_crate', { crate_id: cid });
+            spawnParticles(b.x, b.y, '#c08040', 10);
+            if (!b.pierce) hitSomething = true;
+            break;
+          }
+        }
+      }
+
+      // игроки
       if (!hitSomething) {
         for (const sid in players) {
           if (sid === b.owner) continue;
@@ -1275,7 +1643,7 @@
           const p = players[sid];
           if (p.alive === false) continue;
           const dx = p.x - b.x, dy = p.y - b.y;
-          if ((dx * dx + dy * dy) ** 0.5 < HALF + 4) {
+          if ((dx * dx + dy * dy) ** 0.5 < HALF + b.radius) {
             socket.emit('hit', {
               target_sid: sid,
               dmg: b.dmg,
@@ -1283,6 +1651,7 @@
             });
             if (!b.hit_targets) b.hit_targets = [];
             b.hit_targets.push(sid);
+            spawnParticles(b.x, b.y, '#ff4040', 10);
             if (!b.pierce) {
               hitSomething = true;
             }
@@ -1291,7 +1660,21 @@
         }
       }
 
-      if (hitSomething || b.steps > BULLET_MAX || b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
+      // пуля живёт 1.5 сек или попала / ушла за карту
+      if (hitSomething ||
+          b.age >= BULLET_LIFE ||
+          b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
+        // "разрушение" пули
+        for (let k = 0; k < (b.big ? 12 : 6); k++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 1 + Math.random() * 3;
+          particles.push({
+            x: b.x, y: b.y,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            life: 0.6, color: b.big ? '#ffaa33' : b.color,
+            size: b.big ? 4 : 2,
+          });
+        }
         bullets.splice(i, 1);
       }
     }
@@ -1300,11 +1683,11 @@
 
   function renderLoop() {
     render();
-    requestAnimationFrame(updateBullets);
+    requestAnimationFrame(() => updateBullets(0.03));
   }
 
   render();
-  updateBullets();
+  updateBullets(0.03);
 </script>
 </body>
 </html>
