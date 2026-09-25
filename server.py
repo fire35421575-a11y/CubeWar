@@ -16,6 +16,7 @@ COLORS = ["#c0392b", "#2980b9", "#27ae60", "#8e44ad",
 MAX_PLAYERS = 4
 ACTIONS_PER_ROUND = 10
 ROUND_TIME = 50
+PAUSE_TIME = 3
 W, H = 800, 800
 
 
@@ -24,7 +25,6 @@ def generate_code():
 
 
 def get_spawn(idx):
-    """Квадратом: 4 точки по углам."""
     positions = [
         (100, 100),
         (W - 100, 100),
@@ -65,9 +65,9 @@ def on_create(data):
             }
         },
         "round_active": False,
+        "round_num": 0,
     }
     join_room(code)
-    # отправляем хосту его же данные
     emit('joined', {
         "code": code,
         "players": GAMES[code]["players"],
@@ -115,7 +115,6 @@ def on_join(data):
 
 @socketio.on('start_round')
 def on_start_round(data):
-    """Хост запускает раунд — все получают 10 действий."""
     code = data.get('code', '').upper()
     if code not in GAMES:
         return
@@ -123,20 +122,48 @@ def on_start_round(data):
     if request.sid != game["host"]:
         emit('error_msg', {"text": "Только хост может начать"})
         return
+    if game.get("round_active"):
+        return
     game["round_active"] = True
+    game["round_num"] = game.get("round_num", 0) + 1
     for p in game["players"].values():
         p["actions_left"] = ACTIONS_PER_ROUND
     emit('round_started', {
         "round_time": ROUND_TIME,
         "actions_per_round": ACTIONS_PER_ROUND,
+        "round_num": game["round_num"],
     }, to=code)
+    socketio.start_background_task(round_loop, code)
 
-    # автоконец раунда
-    socketio.sleep(ROUND_TIME)
-    if code in GAMES:
+
+def round_loop(code):
+    """Цикл раундов: ROUND_TIME игры → PAUSE_TIME пауза → снова."""
+    while True:
+        socketio.sleep(ROUND_TIME)
+        if code not in GAMES:
+            return
         g = GAMES[code]
+        if not g.get("round_active"):
+            return
         g["round_active"] = False
-        emit('round_ended', {}, to=code)
+        emit('round_ended', {"pause": PAUSE_TIME}, to=code)
+        socketio.sleep(PAUSE_TIME)
+        if code not in GAMES:
+            return
+        g = GAMES[code]
+        alive = [p for p in g["players"].values() if p["hp"] > 0]
+        if len(alive) <= 1:
+            return
+        g["round_active"] = True
+        g["round_num"] = g.get("round_num", 0) + 1
+        for p in g["players"].values():
+            if p["hp"] > 0:
+                p["actions_left"] = ACTIONS_PER_ROUND
+        emit('round_started', {
+            "round_time": ROUND_TIME,
+            "actions_per_round": ACTIONS_PER_ROUND,
+            "round_num": g["round_num"],
+        }, to=code)
 
 
 @socketio.on('move')
@@ -145,6 +172,10 @@ def on_move(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
+            if p["hp"] <= 0:
+                return
+            if not game.get("round_active"):
+                return
             if p["actions_left"] <= 0:
                 emit('error_msg', {"text": "Нет действий"})
                 return
@@ -165,6 +196,10 @@ def on_shoot(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
+            if p["hp"] <= 0:
+                return
+            if not game.get("round_active"):
+                return
             if p["actions_left"] <= 0:
                 emit('error_msg', {"text": "Нет действий"})
                 return
@@ -181,12 +216,13 @@ def on_shoot(data):
 
 @socketio.on('hit')
 def on_hit(data):
-    """Клиент сообщает о попадании."""
     target_sid = data.get("target_sid")
     dmg = data.get("dmg", 20)
     for code, game in GAMES.items():
         if target_sid in game["players"]:
             p = game["players"][target_sid]
+            if p["hp"] <= 0:
+                break
             p["hp"] = max(0, p["hp"] - dmg)
             emit('player_hit', {
                 "sid": target_sid,
@@ -206,6 +242,8 @@ def on_disconnect():
             emit('player_left', {"sid": sid}, to=code)
             if not game["players"]:
                 del GAMES[code]
+            elif sid == game.get("host") and game["players"]:
+                game["host"] = list(game["players"].keys())[0]
             break
 
 
