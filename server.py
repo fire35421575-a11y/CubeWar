@@ -27,7 +27,7 @@ PASSIVE_INCOME = 1
 KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
-START_COINS = 20
+START_COINS = 500
 
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
