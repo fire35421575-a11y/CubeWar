@@ -1,1310 +1,569 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>CubeWar</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  body {
-    background: #0f0f16; color: #e8e8f0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-    min-height: 100vh; display: flex; flex-direction: column;
-    align-items: center; padding: 8px; overflow: hidden; touch-action: none;
-    user-select: none;
-  }
-  h1 {
-    font-size: 20px; font-weight: 800; letter-spacing: 6px;
-    color: #fff; margin: 8px 0 4px;
-    text-shadow: 0 0 20px rgba(155,184,255,0.5);
-  }
-  .screen { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 600px; }
-  .screen.active { display: flex; }
-  input {
-    background: #1c1c26; border: 1px solid #2e2e3c; color: #fff;
-    padding: 14px 16px; border-radius: 10px; font-size: 15px;
-    width: 100%; margin: 6px 0; outline: none; font-family: inherit;
-    text-align: center; transition: 0.15s;
-  }
-  input:focus { border-color: #5a7fd8; background: #202030; }
-  .big-btn {
-    background: linear-gradient(180deg, #4a6fd8, #3a5fcd);
-    border: none; color: #fff; padding: 14px 20px; border-radius: 10px;
-    font-size: 14px; font-weight: 700; cursor: pointer; width: 100%;
-    margin: 5px 0; transition: 0.15s; font-family: inherit;
-    letter-spacing: 1px; text-transform: uppercase;
-  }
-  .big-btn:active { transform: scale(0.97); }
-  .big-btn.secondary { background: #1c1c26; color: #9bb8ff; border: 1px solid #2e2e3c; }
-  .big-btn:disabled { background: #1c1c26; color: #555; cursor: default; text-transform: none; letter-spacing: 0; }
-  .big-btn.green { background: linear-gradient(180deg, #2ecc71, #27ae60); }
-  .big-btn.ready { background: linear-gradient(180deg, #27ae60, #1e8449); }
-  .room-code {
-    background: #1c1c26; border: 2px dashed #5a7fd8; color: #9bb8ff;
-    padding: 16px; border-radius: 10px; font-size: 28px; font-weight: 800;
-    letter-spacing: 8px; margin: 10px 0; user-select: all; text-align: center;
-    width: 100%; font-family: 'Courier New', monospace;
-  }
-  .hint { font-size: 12px; color: #666680; text-align: center; margin: 6px 0; line-height: 1.5; }
-  .status { font-size: 12px; color: #666680; margin: 4px 0; text-align: center; }
-  canvas {
-    background: #fff; border-radius: 10px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
-    touch-action: none; width: 100%; max-width: 600px; height: auto;
-    display: block;
-  }
-  .controls {
-    display: grid;
-    grid-template-columns: repeat(5, 58px);
-    grid-template-rows: repeat(2, 58px);
-    gap: 8px; margin-top: 10px;
-  }
-  .btn {
-    background: #1c1c26; border: 1px solid #2e2e3c; border-radius: 12px;
-    color: #e8e8f0; font-size: 22px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    user-select: none; transition: 0.1s; font-weight: 600;
-  }
-  .btn:active { background: #252533; transform: scale(0.94); }
-  .btn:disabled { opacity: 0.35; cursor: default; }
-  .btn-up    { grid-column: 2; grid-row: 1; }
-  .btn-left  { grid-column: 1; grid-row: 2; }
-  .btn-down  { grid-column: 2; grid-row: 2; }
-  .btn-right { grid-column: 3; grid-row: 2; }
-  .btn-shoot { grid-column: 4; grid-row: 2; background: #a02020; font-size: 20px; }
-  .btn-shoot:active { background: #c02828; }
-  .btn-wall  { grid-column: 4; grid-row: 1; background: #4a5a8a; font-size: 18px; }
-  .btn-wall:active { background: #5a6a9a; }
-  .btn-farm  { grid-column: 5; grid-row: 1; background: #4a8a5a; font-size: 18px; }
-  .btn-farm:active { background: #5a9a6a; }
-  .btn-gun   { grid-column: 5; grid-row: 2; background: #8a5a4a; font-size: 18px; }
-  .btn-gun:active { background: #9a6a5a; }
+from flask import Flask, send_from_directory, request
+from flask_socketio import SocketIO, emit, join_room
+import os
+import random
+import string
+import time
 
-  .players-bar {
-    display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0;
-    justify-content: center; width: 100%;
-  }
-  .player-chip {
-    padding: 4px 10px; border-radius: 20px; font-size: 11px;
-    font-weight: 700; color: #fff; letter-spacing: 0.5px;
-    display: flex; align-items: center; gap: 6px;
-  }
-  .player-chip .check { font-size: 12px; opacity: 0.5; }
-  .player-chip.ready .check { opacity: 1; color: #2ecc71; }
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'cubewar_secret'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
-  .hud {
-    display: flex; gap: 12px; margin: 8px 0; font-size: 13px;
-    font-weight: 700; align-items: center; padding: 8px 14px;
-    background: #1c1c26; border-radius: 10px; border: 1px solid #2e2e3c;
-    min-width: 380px; justify-content: center;
-  }
-  .hud .hp { color: #2ecc71; }
-  .hud .hp.low { color: #e74c3c; }
-  .hud .coins { color: #f1c40f; }
-  .hud .kills { color: #e74c3c; }
-  .hud .cd { color: #f39c12; min-width: 70px; text-align: center; }
-  .hud .cd.ready { color: #2ecc71; }
+GAMES = {}
 
-  #winBanner {
-    position: fixed; top: 50%; left: 50%;
-    transform: translate(-50%, -50%) scale(0.5);
-    background: linear-gradient(135deg, #f1c40f, #e67e22);
-    color: #fff; padding: 30px 50px; border-radius: 20px;
-    font-size: 32px; font-weight: 800; letter-spacing: 4px;
-    text-align: center; box-shadow: 0 20px 80px rgba(241,196,15,0.6);
-    opacity: 0; pointer-events: none;
-    transition: opacity 0.4s, transform 0.4s; z-index: 1000;
-    line-height: 1.4;
-  }
-  #winBanner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  #winBanner small {
-    display: block; font-size: 18px; font-weight: 600;
-    letter-spacing: 2px; margin-top: 10px; color: #fff;
-  }
+COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6",
+          "#f39c12", "#1abc9c", "#e91e63", "#34495e"]
 
-  /* === ЭМОЦИИ === */
-  #emotionBtn {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #4a6fd8, #3a5fcd);
-    border: 2px solid #5a7fd8;
-    color: #fff;
-    font-size: 28px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 6px 24px rgba(74,111,216,0.5);
-    z-index: 500;
-    transition: transform 0.2s, box-shadow 0.2s;
-    user-select: none;
-  }
-  #emotionBtn:active { transform: scale(0.9); }
-  #emotionBtn.hidden { display: none; }
+MAX_PLAYERS = 4
+COOLDOWN = 0.5
+W, H = 800, 800
+WALL_HP = 4
+WALL_COST = 10
+FARM_COST = 20
+FARM_INCOME_TIME = 5
+FARM_INCOME = 1
+PASSIVE_INCOME_TIME = 5
+PASSIVE_INCOME = 1
+KILL_REWARD = 5
+REGEN_TIME = 3
+REGEN_AMOUNT = 2
+START_COINS = 500
+EMOTION_COOLDOWN = 6
 
-  #emotionPanel {
-    position: fixed;
-    bottom: 96px;
-    right: 24px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    padding: 12px;
-    background: rgba(28,28,38,0.95);
-    border: 1px solid #2e2e3c;
-    border-radius: 16px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
-    z-index: 499;
-    opacity: 0;
-    transform: translateY(20px) scale(0.8);
-    pointer-events: none;
-    transition: opacity 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
-                transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  #emotionPanel.show {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    pointer-events: auto;
-  }
-  .emotion-option {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    background: #252533;
-    border: 1px solid #2e2e3c;
-    font-size: 26px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: transform 0.1s, background 0.1s;
-    user-select: none;
-  }
-  .emotion-option:active {
-    transform: scale(0.85);
-    background: #3a5fcd;
-  }
+GUN_LEVELS = [
+    {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
+    {"name": "Двойной",  "dmg": 15, "bullets": 2, "cost": 15,  "pierce": False},
+    {"name": "Тройной",  "dmg": 15, "bullets": 3, "cost": 30,  "pierce": False},
+    {"name": "Тяжёлый",  "dmg": 25, "bullets": 3, "cost": 60,  "pierce": False},
+    {"name": "Лазер",    "dmg": 20, "bullets": 3, "cost": 120, "pierce": True},
+]
 
-  #emotionCooldownBar {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background: conic-gradient(#e74c3c 0deg, rgba(231,76,60,0.2) 0deg);
-    pointer-events: none;
-    z-index: 501;
-    display: none;
-  }
-  #emotionCooldownBar.show { display: block; }
-  #emotionCooldownText {
-    position: fixed;
-    bottom: 42px;
-    right: 42px;
-    font-size: 14px;
-    font-weight: 800;
-    color: #fff;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.8);
-    z-index: 502;
-    pointer-events: none;
-    display: none;
-  }
-  #emotionCooldownText.show { display: block; }
-</style>
-</head>
-<body>
 
-<div id="winBanner"></div>
+def generate_code():
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-<h1>CUBE WAR</h1>
 
-<div class="screen active" id="menuScreen">
-  <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
-  <input type="text" id="nameInput" placeholder="Твоё имя" maxlength="12">
-  <button class="big-btn" id="createBtn">Создать комнату</button>
-  <input type="text" id="codeInput" placeholder="Код комнаты" maxlength="6"
-         style="text-transform: uppercase; font-family: 'Courier New', monospace; letter-spacing: 4px;">
-  <button class="big-btn secondary" id="joinBtn">Присоединиться</button>
-  <div class="status" id="menuStatus"></div>
-</div>
+def get_spawns(count):
+    all_positions = [
+        (80, 80), (W - 80, 80), (80, H - 80), (W - 80, H - 80),
+        (W // 2, 80), (W // 2, H - 80), (80, H // 2), (W - 80, H // 2),
+        (W // 3, H // 3), (W * 2 // 3, H // 3),
+        (W // 3, H * 2 // 3), (W * 2 // 3, H * 2 // 3),
+    ]
+    random.shuffle(all_positions)
+    return all_positions[:count]
 
-<div class="screen" id="lobbyScreen">
-  <div class="hint">Код комнаты:</div>
-  <div class="room-code" id="roomCode">------</div>
-  <div class="hint" id="lobbyHint">Скинь код друзьям. Каждый жмёт «✅ Готов». Хост — «▶️ Начать».</div>
-  <button class="big-btn ready" id="readyBtn">✅ Я готов</button>
-  <button class="big-btn green" id="startBtn" disabled>▶️ Начать игру</button>
-  <div class="players-bar" id="lobbyPlayers"></div>
-  <div class="status" id="lobbyStatus"></div>
-</div>
 
-<div class="screen" id="gameScreen">
-  <div class="hud">
-    <span class="hp" id="hpWrap">❤️ <span id="hpView">100</span></span>
-    <span class="coins">💰 <span id="coinsView">500</span></span>
-    <span class="kills">💀 <span id="killsView">0</span></span>
-    <span class="cd ready" id="cdView">КД: 0.0</span>
-  </div>
-  <canvas id="canvas" width="800" height="800"></canvas>
-  <div class="controls">
-    <button class="btn btn-farm" id="farmBtn">🏭</button>
-    <button class="btn btn-wall" id="wallBtn">▩</button>
-    <button class="btn btn-up" data-dir="up">↑</button>
-    <button class="btn btn-left" data-dir="left">←</button>
-    <button class="btn btn-down" data-dir="down">↓</button>
-    <button class="btn btn-right" data-dir="right">→</button>
-    <button class="btn btn-shoot" id="shootBtn">◆</button>
-    <button class="btn btn-gun" id="gunBtn">🔫</button>
-  </div>
-</div>
+def check_wall_collision(game, x, y):
+    half = 25
+    for w in game["walls"].values():
+        if w["hp"] <= 0:
+            continue
+        wx, wy = w["x"], w["y"]
+        if (x + half > wx - 25 and x - half < wx + 25 and
+                y + half > wy - 25 and y - half < wy + 25):
+            return True
+    return False
 
-<button id="emotionBtn">💬</button>
-<div id="emotionPanel">
-  <div class="emotion-option" data-emoji="😂">😂</div>
-  <div class="emotion-option" data-emoji="😡">😡</div>
-  <div class="emotion-option" data-emoji="😱">😱</div>
-  <div class="emotion-option" data-emoji="👍">👍</div>
-  <div class="emotion-option" data-emoji="🔥">🔥</div>
-  <div class="emotion-option" data-emoji="❤️">❤️</div>
-  <div class="emotion-option" data-emoji="😎">😎</div>
-  <div class="emotion-option" data-emoji="💀">💀</div>
-</div>
-<div id="emotionCooldownBar"></div>
-<div id="emotionCooldownText"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-<script>
-  // ==== ТЕЛЕГРАМ ====
-  const tg = window.Telegram?.WebApp;
-  if (tg) {
-    tg.ready(); tg.expand();
-    try { tg.setHeaderColor('#0f0f16'); } catch(e) {}
-    try { tg.setBackgroundColor('#0f0f16'); } catch(e) {}
-    try { tg.enableClosingConfirmation(); } catch(e) {}
-  }
-  function haptic(type = 'light') {
-    try {
-      if (!tg || !tg.HapticFeedback) return;
-      if (type === 'shot') tg.HapticFeedback.impactOccurred('heavy');
-      else if (type === 'hit') tg.HapticFeedback.notificationOccurred('success');
-      else if (type === 'emotion') tg.HapticFeedback.notificationOccurred('success');
-      else tg.HapticFeedback.impactOccurred('light');
-    } catch(e) {}
-  }
+def check_farm_collision(game, x, y):
+    for farm in game["farms"].values():
+        if abs(farm["x"] - x) < 60 and abs(farm["y"] - y) < 60:
+            return True
+    return False
 
-  // ==== КОНСТАНТЫ ====
-  const W = 800, H = 800;
-  const CUBE = 50, HALF = CUBE / 2;
-  const STEP = 50, ANIM = 6;
-  const BULLET_STEP = 30, BULLET_MAX = 30;
-  const WALL_SIZE = 50;
-  const EMOTION_CD = 6;
-  const EMOTION_LIFE = 3;
 
-  // ==== СОСТОЯНИЕ ====
-  let socket = null;
-  let mySid = null;
-  let myColor = "#1a1a1a";
-  let roomCode = "";
-  let players = {};
-  let me = null;
-  let myCoins = 500;
-  let myHp = 100;
-  let myKills = 0;
-  let walls = {};
-  let farms = {};
-  let GUN_LEVELS = [];
-  let FARM_COST = 20;
-  let WALL_COST = 10;
-  let COOLDOWN = 0.5;
-  let lastAction = 0;
-  let lastEmotionSent = 0;
-  let emotionCooldownUntil = 0;
-  let bullets = [];
-  let particles = [];
-  let hitFlashes = [];
-  let wallFragments = [];
-  let floatingTexts = [];
-  let activeEmotions = []; // {x, y, emoji, life, rotation}
-  let moving = false;
-  let gameStarted = false;
+def can_act(p):
+    now = time.time()
+    return (now - p.get("last_action", 0)) >= COOLDOWN
 
-  const $ = id => document.getElementById(id);
-  const menuScreen = $('menuScreen'), lobbyScreen = $('lobbyScreen'), gameScreen = $('gameScreen');
-  const nameInput = $('nameInput'), codeInput = $('codeInput');
-  const createBtn = $('createBtn'), joinBtn = $('joinBtn'), menuStatus = $('menuStatus');
-  const roomCodeEl = $('roomCode'), lobbyPlayers = $('lobbyPlayers');
-  const lobbyStatus = $('lobbyStatus');
-  const readyBtn = $('readyBtn'), startBtn = $('startBtn');
-  const canvas = $('canvas'), ctx = canvas.getContext('2d');
-  const hpView = $('hpView'), coinsView = $('coinsView'), killsView = $('killsView');
-  const cdView = $('cdView'), hpWrap = $('hpWrap');
-  const winBanner = $('winBanner');
-  const emotionBtn = $('emotionBtn');
-  const emotionPanel = $('emotionPanel');
-  const emotionCooldownBar = $('emotionCooldownBar');
-  const emotionCooldownText = $('emotionCooldownText');
 
-  // Автозаполнение имени
-  if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-    const u = tg.initDataUnsafe.user;
-    const name = u.first_name || u.username || '';
-    if (name) nameInput.value = name.slice(0, 12);
-  }
+def mark_action(p):
+    p["last_action"] = time.time()
 
-  function showScreen(id) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    $(id).classList.add('active');
-    emotionBtn.classList.toggle('hidden', id !== 'gameScreen');
-    if (id !== 'gameScreen') {
-      emotionPanel.classList.remove('show');
+
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
+
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('.', path)
+
+
+@socketio.on('create_game')
+def on_create(data):
+    code = generate_code()
+    while code in GAMES:
+        code = generate_code()
+    sid = request.sid
+    name = data.get('name', 'Игрок')[:12]
+    GAMES[code] = {
+        "host": sid,
+        "players": {},
+        "walls": {},
+        "farms": {},
+        "wall_id": 0,
+        "farm_id": 0,
+        "started": False,
     }
-  }
+    join_room(code)
+    emit('joined', {
+        "code": code,
+        "players": GAMES[code]["players"],
+        "my_color": COLORS[0],
+        "cooldown": COOLDOWN,
+        "walls": {},
+        "farms": {},
+        "gun_levels": GUN_LEVELS,
+        "farm_cost": FARM_COST,
+        "wall_cost": WALL_COST,
+        "started": False,
+    })
 
-  function canAct() {
-    return (performance.now() - lastAction) / 1000 >= COOLDOWN;
-  }
 
-  function updateCD() {
-    const elapsed = (performance.now() - lastAction) / 1000;
-    const left = Math.max(0, COOLDOWN - elapsed);
-    if (left > 0) {
-      cdView.textContent = 'КД: ' + left.toFixed(1);
-      cdView.classList.remove('ready');
-      document.querySelectorAll('.btn').forEach(b => b.disabled = true);
-    } else {
-      cdView.textContent = 'КД: 0.0';
-      cdView.classList.add('ready');
-      document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+@socketio.on('join_game')
+def on_join(data):
+    code = data.get('code', '').upper()
+    sid = request.sid
+    name = data.get('name', 'Игрок')[:12]
+    if code not in GAMES:
+        emit('error_msg', {"text": "Комната не найдена"})
+        return
+    game = GAMES[code]
+    if len(game["players"]) >= MAX_PLAYERS:
+        emit('error_msg', {"text": "Комната полна"})
+        return
+    if game.get("started"):
+        emit('error_msg', {"text": "Игра уже началась"})
+        return
+    idx = len(game["players"])
+    game["players"][sid] = {
+        "name": name,
+        "x": 0, "y": 0,
+        "dir": {"x": 1, "y": 0},
+        "hp": 100,
+        "max_hp": 100,
+        "coins": START_COINS,
+        "kills": 0,
+        "gun_level": 0,
+        "color": COLORS[idx % len(COLORS)],
+        "last_action": 0,
+        "last_passive": time.time(),
+        "last_regen": time.time(),
+        "last_emotion": 0,
+        "ready": False,
     }
-  }
-  setInterval(updateCD, 80);
+    join_room(code)
+    emit('joined', {
+        "code": code,
+        "players": game["players"],
+        "my_color": COLORS[idx % len(COLORS)],
+        "cooldown": COOLDOWN,
+        "walls": game["walls"],
+        "farms": game["farms"],
+        "gun_levels": GUN_LEVELS,
+        "farm_cost": FARM_COST,
+        "wall_cost": WALL_COST,
+        "started": False,
+    })
+    emit('player_joined', {
+        "sid": sid,
+        "player": game["players"][sid],
+    }, to=code, include_self=False)
 
-  function updateEmotionCooldown() {
-    const now = Date.now();
-    const left = Math.max(0, (emotionCooldownUntil - now) / 1000);
-    if (left > 0) {
-      emotionCooldownBar.classList.add('show');
-      emotionCooldownText.classList.add('show');
-      emotionCooldownText.textContent = Math.ceil(left);
-      const deg = (1 - left / EMOTION_CD) * 360;
-      emotionCooldownBar.style.background =
-        `conic-gradient(#e74c3c ${deg}deg, rgba(231,76,60,0.2) ${deg}deg)`;
-    } else {
-      emotionCooldownBar.classList.remove('show');
-      emotionCooldownText.classList.remove('show');
-    }
-  }
-  setInterval(updateEmotionCooldown, 100);
 
-  function showWinBanner(text) {
-    winBanner.innerHTML = text;
-    winBanner.classList.add('show');
-    haptic('hit');
-  }
+@socketio.on('toggle_ready')
+def on_toggle_ready(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            p["ready"] = not p.get("ready", False)
+            emit('ready_changed', {
+                "sid": sid,
+                "ready": p["ready"],
+            }, to=code)
+            break
 
-  // ==== СОКЕТ ====
-  function connect() {
-    socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
-    socket.on('connect', () => { mySid = socket.id; });
 
-    socket.on('joined', (data) => {
-      roomCode = data.code;
-      myColor = data.my_color;
-      players = data.players;
-      walls = data.walls || {};
-      farms = data.farms || {};
-      GUN_LEVELS = data.gun_levels || [];
-      FARM_COST = data.farm_cost || 20;
-      WALL_COST = data.wall_cost || 10;
-      COOLDOWN = data.cooldown || 0.5;
-      me = players[mySid];
-      if (me) {
-        myCoins = me.coins;
-        myHp = me.hp;
-        myKills = me.kills;
-      }
-      roomCodeEl.textContent = roomCode;
-      showScreen('lobbyScreen');
-      updateLobby();
-    });
+@socketio.on('start_game')
+def on_start_game(data):
+    code = data.get('code', '').upper()
+    if code not in GAMES:
+        return
+    game = GAMES[code]
+    if request.sid != game["host"]:
+        emit('error_msg', {"text": "Только хост"})
+        return
+    if game.get("started"):
+        return
+    players = game["players"]
+    if len(players) < 1:
+        emit('error_msg', {"text": "Нужен хотя бы 1 игрок"})
+        return
+    if len(players) > 1:
+        not_ready = [p["name"] for p in players.values() if not p.get("ready")]
+        if not_ready:
+            emit('error_msg', {"text": "Не все готовы: " + ", ".join(not_ready)})
+            return
 
-    socket.on('player_joined', (data) => {
-      players[data.sid] = data.player;
-      updateLobby();
-    });
+    game["started"] = True
+    spawns = get_spawns(len(players))
+    for i, (sid, p) in enumerate(players.items()):
+        p["x"], p["y"] = spawns[i]
+        p["hp"] = 100
+        p["coins"] = START_COINS
+        p["kills"] = 0
+        p["gun_level"] = 0
+        p["last_passive"] = time.time()
+        p["last_regen"] = time.time()
+        p["last_emotion"] = 0
 
-    socket.on('player_left', (data) => {
-      delete players[data.sid];
-      updateLobby();
-      render();
-    });
+    emit('game_started', {
+        "players": players,
+        "walls": game["walls"],
+        "farms": game["farms"],
+    }, to=code)
 
-    socket.on('ready_changed', (data) => {
-      const p = players[data.sid];
-      if (p) p.ready = data.ready;
-      updateLobby();
-    });
+    socketio.start_background_task(passive_loop, code)
 
-    socket.on('game_started', (data) => {
-      players = data.players;
-      walls = data.walls || {};
-      farms = data.farms || {};
-      me = players[mySid];
-      if (me) {
-        myCoins = me.coins;
-        myHp = me.hp;
-        myKills = me.kills;
-      }
-      gameStarted = true;
-      updateHUD();
-      showScreen('gameScreen');
-      render();
-    });
 
-    socket.on('tick_update', (data) => {
-      if (data.players) {
-        for (const sid in data.players) {
-          if (players[sid]) {
-            players[sid].coins = data.players[sid].coins;
-            players[sid].hp = data.players[sid].hp;
-            if (data.players[sid].kills !== undefined) {
-              players[sid].kills = data.players[sid].kills;
+def passive_loop(code):
+    """Каждую секунду: доход, реген, фермы. Только socketio.server.emit!"""
+    while True:
+        socketio.sleep(1)
+        if code not in GAMES:
+            return
+        g = GAMES[code]
+        if not g.get("started"):
+            return
+        now = time.time()
+
+        # Пассивный доход
+        for sid, p in g["players"].items():
+            if p["hp"] <= 0:
+                continue
+            if now - p.get("last_passive", 0) >= PASSIVE_INCOME_TIME:
+                p["coins"] += PASSIVE_INCOME
+                p["last_passive"] = now
+
+        # Регенерация
+        for sid, p in g["players"].items():
+            if p["hp"] <= 0:
+                continue
+            if now - p.get("last_regen", 0) >= REGEN_TIME:
+                if p["hp"] < p["max_hp"]:
+                    p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
+                p["last_regen"] = now
+
+        # Доход с ферм
+        for fid, farm in list(g["farms"].items()):
+            if farm["hp"] <= 0:
+                del g["farms"][fid]
+                continue
+            if now - farm.get("last_income", 0) >= FARM_INCOME_TIME:
+                owner_sid = farm.get("owner")
+                if owner_sid and owner_sid in g["players"]:
+                    g["players"][owner_sid]["coins"] += FARM_INCOME
+                    print(f"[FARM INCOME] farm {fid} -> {g['players'][owner_sid]['name']} +{FARM_INCOME}")
+                    socketio.server.emit('farm_income', {
+                        "id": fid,
+                        "x": farm["x"],
+                        "y": farm["y"],
+                        "amount": FARM_INCOME,
+                        "owner": owner_sid,
+                    }, room=code, namespace='/')
+                farm["last_income"] = now
+
+        # ВАЖНО: socketio.server.emit, не socketio.emit
+        socketio.server.emit('tick_update', {
+            "players": {
+                s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]}
+                for s, p in g["players"].items()
             }
-          }
-        }
-        if (me && players[mySid]) {
-          myCoins = players[mySid].coins;
-          myHp = players[mySid].hp;
-          myKills = players[mySid].kills;
-          me.coins = myCoins;
-          me.hp = myHp;
-          me.kills = myKills;
-        }
-        updateHUD();
-      }
-    });
-
-    socket.on('player_moved', (data) => {
-      const p = players[data.sid];
-      if (p) {
-        p.x = data.x; p.y = data.y; p.dir = data.dir;
-        render();
-      }
-    });
-
-    socket.on('bullet_fired', (data) => {
-      const count = data.bullets || 1;
-      const baseAngle = Math.atan2(data.dir.y, data.dir.x);
-      const spread = 0.15;
-      for (let i = 0; i < count; i++) {
-        const offset = (i - (count - 1) / 2) * spread;
-        const a = baseAngle + offset;
-        bullets.push({
-          x: data.x, y: data.y,
-          dx: Math.cos(a), dy: Math.sin(a),
-          color: data.color, owner: data.sid, steps: 0,
-          dmg: data.dmg, pierce: data.pierce,
-          hit_targets: [],
-        });
-      }
-      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 6);
-    });
-
-    socket.on('player_hit', (data) => {
-      if (data.sid === mySid) {
-        myHp = data.hp;
-      } else {
-        const p = players[data.sid];
-        if (p) p.hp = data.hp;
-      }
-      const p = players[data.sid];
-      if (p) {
-        spawnParticles(p.x, p.y, '#ff4040', 12);
-        spawnFlash(p.x, p.y);
-      }
-      haptic('hit');
-      render();
-      updateHUD();
-    });
-
-    socket.on('player_died', (data) => {
-      const p = players[data.sid];
-      if (p) {
-        p.hp = 0; p.alive = false;
-        spawnParticles(p.x, p.y, p.color, 30);
-        spawnFlash(p.x, p.y);
-        render();
-      }
-      if (data.sid === mySid) {
-        setTimeout(() => {
-          showScreen('menuScreen');
-          winBanner.classList.remove('show');
-        }, 3000);
-      }
-    });
-
-    socket.on('wall_placed', (data) => {
-      walls[data.id] = { x: data.x, y: data.y, hp: data.hp };
-      if (data.my_coins !== undefined) myCoins = data.my_coins;
-      if (me) me.coins = myCoins;
-      spawnParticles(data.x, data.y, '#5a7fd8', 10);
-      render();
-      updateHUD();
-    });
-
-    socket.on('wall_hit', (data) => {
-      if (walls[data.id]) walls[data.id].hp = data.hp;
-      spawnParticles(data.x, data.y, '#8fa8d8', 5);
-      render();
-    });
-
-    socket.on('wall_destroyed', (data) => {
-      if (walls[data.id]) delete walls[data.id];
-      for (let i = 0; i < 18; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 5;
-        wallFragments.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, size: 4 + Math.random() * 6,
-          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.3,
-        });
-      }
-      render();
-    });
-
-    socket.on('farm_placed', (data) => {
-      farms[data.id] = { x: data.x, y: data.y, hp: data.hp, last_income: 0 };
-      if (data.my_coins !== undefined) myCoins = data.my_coins;
-      if (me) me.coins = myCoins;
-      spawnParticles(data.x, data.y, '#f1c40f', 15);
-      floatingTexts.push({
-        x: data.x, y: data.y - 40,
-        text: '🏭',
-        color: '#f1c40f',
-        life: 1.5, vy: -1.5,
-      });
-      render();
-      updateHUD();
-    });
-
-    socket.on('farm_hit', (data) => {
-      if (farms[data.id]) farms[data.id].hp = data.hp;
-      spawnParticles(data.x, data.y, '#d4a017', 6);
-      render();
-    });
-
-    socket.on('farm_destroyed', (data) => {
-      if (farms[data.id]) delete farms[data.id];
-      for (let i = 0; i < 18; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 5;
-        wallFragments.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, size: 5 + Math.random() * 5,
-          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.3,
-          color: '#f1c40f',
-        });
-      }
-      render();
-    });
-
-    socket.on('farm_income', (data) => {
-      floatingTexts.push({
-        x: data.x, y: data.y - 30,
-        text: '+' + (data.amount || 1),
-        color: '#f1c40f',
-        life: 1.5, vy: -1.2,
-      });
-      if (data.owner === mySid) {
-        myCoins += (data.amount || 1);
-        if (me) me.coins = myCoins;
-        updateHUD();
-      }
-    });
-
-    socket.on('gun_upgraded', (data) => {
-      if (data.sid === mySid) {
-        if (data.my_coins !== undefined) myCoins = data.my_coins;
-        if (me) {
-          me.gun_level = data.gun_level;
-          me.coins = myCoins;
-        }
-        if (GUN_LEVELS[data.gun_level]) {
-          floatingTexts.push({
-            x: me.x, y: me.y - 40,
-            text: GUN_LEVELS[data.gun_level].name,
-            color: '#e67e22', life: 2, vy: -0.8,
-          });
-        }
-      } else {
-        const p = players[data.sid];
-        if (p) p.gun_level = data.gun_level;
-      }
-      updateHUD();
-    });
-
-    // ==== ЭМОЦИИ ====
-    socket.on('emotion_shown', (data) => {
-      activeEmotions.push({
-        x: data.x,
-        y: data.y - 60,
-        emoji: data.emoji,
-        life: EMOTION_LIFE,
-        rotation: 0,
-        scale: 0,
-      });
-      // звук/вибруха только для своей эмоции
-      if (data.sid === mySid) haptic('emotion');
-    });
-
-    socket.on('emotion_cooldown', (data) => {
-      const left = data.left || 0;
-      emotionCooldownUntil = Date.now() + left * 1000;
-      updateEmotionCooldown();
-    });
-
-    socket.on('game_over', (data) => {
-      showWinBanner('🏆 ' + data.winner + '<small>побеждает!</small>');
-      setTimeout(() => {
-        winBanner.classList.remove('show');
-        showScreen('menuScreen');
-      }, 4000);
-    });
-
-    socket.on('error_msg', (data) => {
-      menuStatus.textContent = data.text;
-      if (gameStarted && me) {
-        floatingTexts.push({
-          x: me.x, y: me.y - 40,
-          text: data.text, color: '#e74c3c', life: 1.5, vy: -0.6,
-        });
-      }
-    });
-
-    socket.on('on_cooldown', () => {
-      haptic('light');
-      cdView.style.color = '#e74c3c';
-      setTimeout(() => { cdView.style.color = ''; }, 250);
-    });
-
-    socket.on('disconnect', () => {
-      menuStatus.textContent = 'Отключён';
-      showScreen('menuScreen');
-    });
-  }
-
-  // ==== ЛОББИ ====
-  function updateLobby() {
-    lobbyPlayers.innerHTML = '';
-    const list = Object.values(players);
-    list.forEach(p => {
-      const chip = document.createElement('div');
-      chip.className = 'player-chip' + (p.ready ? ' ready' : '');
-      chip.style.background = p.color;
-      chip.innerHTML = `${p.name} <span class="check">${p.ready ? '✅' : '⏳'}</span>`;
-      lobbyPlayers.appendChild(chip);
-    });
-    lobbyStatus.textContent = `Игроков: ${list.length} / 4`;
-
-    const allReady = list.length >= 1 && (list.length === 1 || list.every(p => p.ready));
-    startBtn.disabled = !allReady;
-    if (!allReady) {
-      const notReady = list.filter(p => !p.ready).map(p => p.name);
-      if (list.length < 2) {
-        startBtn.textContent = '▶️ Начать (тест)';
-      } else {
-        startBtn.textContent = 'Ждём: ' + notReady.join(', ');
-      }
-    } else {
-      startBtn.textContent = '▶️ Начать игру';
-    }
-
-    if (players[mySid]) {
-      readyBtn.textContent = players[mySid].ready ? '❌ Отменить готовность' : '✅ Я готов';
-    }
-  }
-
-  function updateHUD() {
-    hpView.textContent = myHp;
-    if (myHp <= 30) hpWrap.classList.add('low');
-    else hpWrap.classList.remove('low');
-    coinsView.textContent = myCoins;
-    killsView.textContent = myKills;
-  }
-
-  // ==== КНОПКИ ====
-  createBtn.addEventListener('click', () => {
-    const name = nameInput.value.trim();
-    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
-    if (!socket) connect();
-    setTimeout(() => socket.emit('create_game', { name }), 300);
-  });
-
-  joinBtn.addEventListener('click', () => {
-    const name = nameInput.value.trim();
-    const code = codeInput.value.trim().toUpperCase();
-    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
-    if (!code) { menuStatus.textContent = 'Введи код'; return; }
-    if (!socket) connect();
-    setTimeout(() => socket.emit('join_game', { name, code }), 300);
-  });
-
-  readyBtn.addEventListener('click', () => {
-    if (socket) socket.emit('toggle_ready', {});
-  });
-
-  startBtn.addEventListener('click', () => {
-    if (socket) socket.emit('start_game', { code: roomCode });
-  });
-
-  // ==== ЭМОЦИИ ====
-  emotionBtn.addEventListener('click', () => {
-    emotionPanel.classList.toggle('show');
-    haptic('light');
-  });
-
-  emotionPanel.querySelectorAll('.emotion-option').forEach(opt => {
-    opt.addEventListener('click', () => {
-      const emoji = opt.dataset.emoji;
-      const now = Date.now();
-      if (now < emotionCooldownUntil) {
-        haptic('light');
-        emotionPanel.classList.remove('show');
-        return;
-      }
-      if (socket && gameStarted) {
-        socket.emit('emotion', { emoji });
-        emotionCooldownUntil = now + EMOTION_CD * 1000;
-        updateEmotionCooldown();
-      }
-      emotionPanel.classList.remove('show');
-      haptic('emotion');
-    });
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!emotionPanel.classList.contains('show')) return;
-    if (emotionPanel.contains(e.target)) return;
-    if (emotionBtn.contains(e.target)) return;
-    emotionPanel.classList.remove('show');
-  });
-
-  // ==== ЧАСТИЦЫ ====
-  function spawnParticles(x, y, color, count = 8) {
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 2 + Math.random() * 4;
-      particles.push({
-        x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-        life: 1, color, size: 2 + Math.random() * 3,
-      });
-    }
-  }
-
-  function spawnFlash(x, y) {
-    hitFlashes.push({ x, y, life: 1, radius: 10 });
-  }
-
-  // ==== РИСОВАНИЕ ====
-  function drawGrid() {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = '#e8e8ec';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < W; x += 50) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    }
-    for (let y = 0; y < H; y += 50) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-  }
-
-  function drawCube(p, isMe) {
-    if (p.alive === false) return;
-    const x = p.x - HALF, y = p.y - HALF;
-
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
-
-    const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
-    grad.addColorStop(0, lighten(p.color, 20));
-    grad.addColorStop(1, darken(p.color, 30));
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, CUBE, CUBE);
-
-    ctx.strokeStyle = isMe ? '#000' : 'rgba(0,0,0,0.6)';
-    ctx.lineWidth = isMe ? 3 : 2;
-    ctx.strokeRect(x, y, CUBE, CUBE);
-
-    const lvl = p.gun_level || 0;
-    const barrelLen = 22 + lvl * 5;
-    const barrelW = 10 + lvl * 2;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(Math.atan2(p.dir.y, p.dir.x));
-    ctx.fillStyle = darken(p.color, 50);
-    ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
-    ctx.fillStyle = lvl >= 4 ? '#00e0ff' : '#222';
-    ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
-    if (lvl >= 3) {
-      ctx.fillStyle = darken(p.color, 40);
-      ctx.fillRect(10, -barrelW / 2 - 6, barrelLen - 4, 4);
-      ctx.fillRect(10, barrelW / 2 + 2, barrelLen - 4, 4);
-    }
-    ctx.restore();
-
-    const hpW = 54, hpH = 7;
-    const curHp = isMe ? myHp : p.hp;
-    const ratio = Math.max(0, (curHp || 100) / 100);
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(p.x - hpW / 2 - 2, p.y - HALF - 22, hpW + 4, hpH + 4);
-    ctx.fillStyle = '#111';
-    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW, hpH);
-    const hpColor = ratio > 0.6 ? '#2ecc71' : (ratio > 0.3 ? '#f39c12' : '#e74c3c');
-    ctx.fillStyle = hpColor;
-    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW * ratio, hpH);
-
-    ctx.font = 'bold 12px Arial';
-    ctx.textAlign = 'center';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
-    ctx.strokeText(p.name, p.x, p.y - HALF - 26);
-    ctx.fillStyle = '#000';
-    ctx.fillText(p.name, p.x, p.y - HALF - 26);
-  }
-
-  function drawWalls() {
-    for (const wid in walls) {
-      const w = walls[wid];
-      const x = w.x - WALL_SIZE / 2, y = w.y - WALL_SIZE / 2;
-      const hpRatio = Math.max(0, w.hp / 4);
-
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.fillRect(x + 3, y + 3, WALL_SIZE, WALL_SIZE);
-
-      const grad = ctx.createLinearGradient(x, y, x + WALL_SIZE, y + WALL_SIZE);
-      grad.addColorStop(0, '#7a8fb8');
-      grad.addColorStop(1, '#4a5f88');
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, WALL_SIZE, WALL_SIZE);
-
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 3; i++) {
-        ctx.beginPath();
-        ctx.moveTo(x, y + i * WALL_SIZE / 3);
-        ctx.lineTo(x + WALL_SIZE, y + i * WALL_SIZE / 3);
-        ctx.stroke();
-      }
-      ctx.strokeStyle = hpRatio > 0.5 ? '#2c3e50' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, WALL_SIZE, WALL_SIZE);
-
-      if (hpRatio < 0.5) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(x + 10, y + 5);
-        ctx.lineTo(x + 20, y + 25);
-        ctx.lineTo(x + 15, y + 40);
-        ctx.stroke();
-      }
-    }
-  }
-
-  let wheelAngle = 0;
-  function drawFarms() {
-    wheelAngle += 0.05;
-    for (const fid in farms) {
-      const f = farms[fid];
-      const x = f.x, y = f.y;
-      const hpRatio = Math.max(0, f.hp / 8);
-
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      ctx.fillRect(x - 24, y - 24, 52, 52);
-
-      const grad = ctx.createLinearGradient(x - 22, y - 22, x + 22, y + 22);
-      grad.addColorStop(0, '#d4a017');
-      grad.addColorStop(1, '#8a6a10');
-      ctx.fillStyle = grad;
-      ctx.fillRect(x - 22, y - 22, 44, 44);
-
-      ctx.strokeStyle = hpRatio > 0.5 ? '#6a4a0a' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(x - 22, y - 22, 44, 44);
-
-      ctx.fillStyle = '#4a3005';
-      ctx.fillRect(x - 5, y + 2, 10, 14);
-
-      ctx.fillStyle = '#8b0000';
-      ctx.beginPath();
-      ctx.moveTo(x - 26, y - 22);
-      ctx.lineTo(x, y - 38);
-      ctx.lineTo(x + 26, y - 22);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = '#4a0000';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.save();
-      ctx.translate(x, y - 30);
-      ctx.rotate(wheelAngle);
-      ctx.fillStyle = '#8b5a2b';
-      for (let i = 0; i < 4; i++) {
-        ctx.rotate(Math.PI / 2);
-        ctx.fillRect(0, -3, 26, 6);
-      }
-      ctx.beginPath();
-      ctx.arc(0, 0, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#4a2a0a';
-      ctx.fill();
-      ctx.restore();
-
-      const hpW = 40, hpH = 5;
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(x - hpW/2 - 1, y - 46, hpW + 2, hpH + 2);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(x - hpW/2, y - 45, hpW, hpH);
-      ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : '#e74c3c';
-      ctx.fillRect(x - hpW/2, y - 45, hpW * hpRatio, hpH);
-    }
-  }
-
-  function drawBullets() {
-    bullets.forEach(b => {
-      const tailX = b.x - b.dx * 20;
-      const tailY = b.y - b.dy * 20;
-      const grad = ctx.createLinearGradient(tailX, tailY, b.x, b.y);
-      grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(1, b.color);
-      ctx.beginPath();
-      ctx.moveTo(tailX, tailY);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 6;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 14, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
-      ctx.globalAlpha = 0.2;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = b.pierce ? '#00e0ff' : '#fff';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
-      ctx.fill();
-    });
-  }
-
-  function drawParticles() {
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx; p.y += p.vy;
-      p.vx *= 0.94; p.vy *= 0.94;
-      p.life -= 0.03;
-      if (p.life <= 0) { particles.splice(i, 1); continue; }
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-      ctx.fillStyle = p.color;
-      ctx.globalAlpha = p.life;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function drawWallFragments() {
-    for (let i = wallFragments.length - 1; i >= 0; i--) {
-      const f = wallFragments[i];
-      f.x += f.vx; f.y += f.vy;
-      f.vx *= 0.94; f.vy *= 0.94;
-      f.vy += 0.3;
-      f.life -= 0.02;
-      f.rot += f.vrot;
-      if (f.life <= 0) { wallFragments.splice(i, 1); continue; }
-      ctx.save();
-      ctx.translate(f.x, f.y);
-      ctx.rotate(f.rot);
-      ctx.fillStyle = f.color || '#5a7fd8';
-      ctx.globalAlpha = f.life;
-      ctx.fillRect(-f.size/2, -f.size/2, f.size, f.size);
-      ctx.restore();
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function drawFloatingTexts() {
-    for (let i = floatingTexts.length - 1; i >= 0; i--) {
-      const t = floatingTexts[i];
-      t.y += t.vy;
-      t.life -= 0.02;
-      if (t.life <= 0) { floatingTexts.splice(i, 1); continue; }
-      ctx.font = 'bold 20px Arial';
-      ctx.textAlign = 'center';
-      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      ctx.lineWidth = 4;
-      ctx.strokeText(t.text, t.x, t.y);
-      ctx.fillStyle = t.color;
-      ctx.globalAlpha = Math.min(1, t.life);
-      ctx.fillText(t.text, t.x, t.y);
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function drawFlashes() {
-    for (let i = hitFlashes.length - 1; i >= 0; i--) {
-      const f = hitFlashes[i];
-      f.life -= 0.06; f.radius += 6;
-      if (f.life <= 0) { hitFlashes.splice(i, 1); continue; }
-      ctx.beginPath();
-      ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 4;
-      ctx.globalAlpha = f.life;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  // ==== ЭМОЦИИ (рисование) ====
-  function drawEmotions() {
-    for (let i = activeEmotions.length - 1; i >= 0; i--) {
-      const e = activeEmotions[i];
-      // прогресс жизни 1 → 0
-      const progress = e.life / EMOTION_LIFE;
-      // scale: сначала вырастает, потом держится, потом чуть уменьшается
-      let scale;
-      if (progress > 0.8) {
-        scale = (1 - progress) / 0.2 * 1.3;
-      } else if (progress > 0.2) {
-        scale = 1.3;
-      } else {
-        scale = progress / 0.2 * 1.3;
-      }
-      // вращение: полный круг за время жизни
-      e.rotation += 0.08;
-      // y: медленно поднимается
-      const yOffset = -60 * (1 - progress) * 0.5;
-
-      ctx.save();
-      ctx.translate(e.x, e.y + yOffset);
-      ctx.rotate(e.rotation);
-      ctx.scale(scale, scale);
-      ctx.font = '48px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      // тень
-      ctx.shadowColor = 'rgba(0,0,0,0.6)';
-      ctx.shadowBlur = 8;
-      ctx.globalAlpha = Math.min(1, progress * 1.5);
-      ctx.fillText(e.emoji, 0, 0);
-      ctx.restore();
-
-      e.life -= 0.02;
-      if (e.life <= 0) activeEmotions.splice(i, 1);
-    }
-  }
-
-  function render() {
-    drawGrid();
-    drawFarms();
-    drawWalls();
-    for (const sid in players) {
-      if (sid === mySid) continue;
-      drawCube(players[sid], false);
-    }
-    if (me) drawCube(me, true);
-    drawBullets();
-    drawParticles();
-    drawWallFragments();
-    drawFlashes();
-    drawFloatingTexts();
-    drawEmotions();
-  }
-
-  function lighten(color, percent) {
-    const num = parseInt(color.replace('#',''), 16);
-    let r = Math.min(255, (num >> 16) + percent);
-    let g = Math.min(255, ((num >> 8) & 0x00FF) + percent);
-    let b = Math.min(255, (num & 0x0000FF) + percent);
-    return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
-  }
-  function darken(color, percent) { return lighten(color, -percent); }
-
-  // ==== ДВИЖЕНИЕ ====
-  function move(dir) {
-    if (moving || !me || myHp <= 0 || !canAct() || !gameStarted) {
-      if (!canAct()) haptic('light');
-      return;
-    }
-    haptic('light');
-    lastAction = performance.now();
-    updateCD();
-    moving = true;
-    const dirs = {
-      up:    { x: 0, y: -1 }, down:  { x: 0, y: 1 },
-      left:  { x: -1, y: 0 }, right: { x: 1, y: 0 },
-    };
-    const d = dirs[dir];
-    me.dir = d;
-    const tx = Math.max(HALF, Math.min(W - HALF, me.x + d.x * STEP));
-    const ty = Math.max(HALF, Math.min(H - HALF, me.y + d.y * STEP));
-    const sx = me.x, sy = me.y;
-    const dx = tx - sx, dy = ty - sy;
-    let i = 0;
-    function step() {
-      i++;
-      if (i > ANIM) {
-        me.x = tx; me.y = ty;
-        moving = false;
-        render();
-        socket.emit('move', { x: me.x, y: me.y, dir: me.dir });
-        return;
-      }
-      const t = i / ANIM;
-      me.x = sx + dx * t; me.y = sy + dy * t;
-      render();
-      requestAnimationFrame(step);
-    }
-    step();
-  }
-
-  document.querySelectorAll('.btn').forEach(btn => {
-    if (btn.dataset.dir) btn.addEventListener('click', () => move(btn.dataset.dir));
-  });
-
-  $('shootBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('shot');
-    lastAction = performance.now();
-    updateCD();
-    socket.emit('shoot', {});
-    spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
-  });
-
-  $('wallBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('light');
-    lastAction = performance.now();
-    updateCD();
-    socket.emit('place_wall', {});
-  });
-
-  $('farmBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('light');
-    lastAction = performance.now();
-    updateCD();
-    socket.emit('place_farm', {});
-  });
-
-  $('gunBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !gameStarted) return;
-    haptic('light');
-    socket.emit('upgrade_gun', {});
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowUp') move('up');
-    else if (e.key === 'ArrowDown') move('down');
-    else if (e.key === 'ArrowLeft') move('left');
-    else if (e.key === 'ArrowRight') move('right');
-    else if (e.key === ' ') { e.preventDefault(); $('shootBtn').click(); }
-    else if (e.key === 'e' || e.key === 'E') { $('wallBtn').click(); }
-    else if (e.key === 'q' || e.key === 'Q') { $('farmBtn').click(); }
-    else if (e.key === 'f' || e.key === 'F') { emotionBtn.click(); }
-  });
-
-  // ==== ПУЛИ ====
-  function updateBullets() {
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      const b = bullets[i];
-      b.x += b.dx * BULLET_STEP;
-      b.y += b.dy * BULLET_STEP;
-      b.steps++;
-
-      if (b.steps % 2 === 0) {
-        particles.push({
-          x: b.x, y: b.y,
-          vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2,
-          life: 0.5, color: b.color, size: 2,
-        });
-      }
-
-      let hitSomething = false;
-
-      for (const wid in walls) {
-        const w = walls[wid];
-        if (Math.abs(w.x - b.x) < 25 && Math.abs(w.y - b.y) < 25) {
-          socket.emit('hit_wall', { wall_id: wid });
-          if (!b.pierce) hitSomething = true;
-          break;
-        }
-      }
-
-      if (!hitSomething) {
-        for (const fid in farms) {
-          const f = farms[fid];
-          if (Math.abs(f.x - b.x) < 30 && Math.abs(f.y - b.y) < 30) {
-            socket.emit('hit_farm', { farm_id: fid });
-            if (!b.pierce) hitSomething = true;
-            break;
-          }
-        }
-      }
-
-      if (!hitSomething) {
-        for (const sid in players) {
-          if (sid === b.owner) continue;
-          if (b.hit_targets && b.hit_targets.includes(sid)) continue;
-          const p = players[sid];
-          if (p.alive === false) continue;
-          const dx = p.x - b.x, dy = p.y - b.y;
-          if ((dx * dx + dy * dy) ** 0.5 < HALF + 4) {
-            socket.emit('hit', {
-              target_sid: sid,
-              dmg: b.dmg,
-              killer: b.owner,
-            });
-            if (!b.hit_targets) b.hit_targets = [];
-            b.hit_targets.push(sid);
-            if (!b.pierce) {
-              hitSomething = true;
+        }, room=code, namespace='/')
+
+
+@socketio.on('emotion')
+def on_emotion(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            now = time.time()
+            last = p.get("last_emotion", 0)
+            if now - last < EMOTION_COOLDOWN:
+                left = EMOTION_COOLDOWN - (now - last)
+                emit('emotion_cooldown', {"left": left}, to=sid)
+                return
+            p["last_emotion"] = now
+            emoji = data.get("emoji", "😂")
+            if len(emoji) > 4:
+                emoji = emoji[:4]
+            emit('emotion_shown', {
+                "sid": sid,
+                "emoji": emoji,
+                "x": p["x"],
+                "y": p["y"],
+            }, to=code)
+            break
+
+
+@socketio.on('move')
+def on_move(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
+                return
+            nx = data.get("x", p["x"])
+            ny = data.get("y", p["y"])
+            if check_wall_collision(game, nx, ny):
+                emit('error_msg', {"text": "Стена!"})
+                return
+            if check_farm_collision(game, nx, ny):
+                emit('error_msg', {"text": "Ферма!"})
+                return
+            p["x"] = nx
+            p["y"] = ny
+            p["dir"] = data.get("dir", p["dir"])
+            mark_action(p)
+            emit('player_moved', {
+                "sid": sid, "x": p["x"], "y": p["y"], "dir": p["dir"],
+            }, to=code)
+            break
+
+
+@socketio.on('place_wall')
+def on_place_wall(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
+                return
+            if p["coins"] < WALL_COST:
+                emit('error_msg', {"text": f"Нужно {WALL_COST} очков"})
+                return
+            wx = p["x"] - p["dir"]["x"] * 50
+            wy = p["y"] - p["dir"]["y"] * 50
+            wx = max(25, min(W - 25, wx))
+            wy = max(25, min(H - 25, wy))
+            for other_sid, other in game["players"].items():
+                if other_sid == sid:
+                    continue
+                if other["hp"] <= 0:
+                    continue
+                if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
+                    emit('error_msg', {"text": "Тут игрок"})
+                    return
+            if check_wall_collision(game, wx, wy):
+                return
+            if check_farm_collision(game, wx, wy):
+                return
+            game["wall_id"] += 1
+            wid = str(game["wall_id"])
+            game["walls"][wid] = {"x": wx, "y": wy, "hp": WALL_HP, "owner": sid}
+            p["coins"] -= WALL_COST
+            mark_action(p)
+            emit('wall_placed', {
+                "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
+                "my_coins": p["coins"],
+            }, to=code)
+            break
+
+
+@socketio.on('place_farm')
+def on_place_farm(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            if p["coins"] < FARM_COST:
+                emit('error_msg', {"text": f"Нужно {FARM_COST} очков"})
+                return
+            wx = p["x"] - p["dir"]["x"] * 50
+            wy = p["y"] - p["dir"]["y"] * 50
+            wx = max(40, min(W - 40, wx))
+            wy = max(40, min(H - 40, wy))
+            for other_sid, other in game["players"].items():
+                if other_sid == sid:
+                    continue
+                if other["hp"] <= 0:
+                    continue
+                if abs(other["x"] - wx) < 60 and abs(other["y"] - wy) < 60:
+                    emit('error_msg', {"text": "Тут игрок"})
+                    return
+            if check_wall_collision(game, wx, wy):
+                emit('error_msg', {"text": "Стена мешает"})
+                return
+            if check_farm_collision(game, wx, wy):
+                emit('error_msg', {"text": "Тут уже ферма"})
+                return
+            game["farm_id"] += 1
+            fid = str(game["farm_id"])
+            game["farms"][fid] = {
+                "x": wx, "y": wy,
+                "hp": WALL_HP * 2,
+                "owner": sid,
+                "last_income": time.time(),
             }
-            break;
-          }
-        }
-      }
+            p["coins"] -= FARM_COST
+            print(f"[FARM PLACED] {p['name']} farm {fid} at {wx},{wy}")
+            emit('farm_placed', {
+                "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
+                "my_coins": p["coins"],
+            }, to=code)
+            break
 
-      if (hitSomething || b.steps > BULLET_MAX || b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
-        bullets.splice(i, 1);
-      }
-    }
-    renderLoop();
-  }
 
-  function renderLoop() {
-    render();
-    requestAnimationFrame(updateBullets);
-  }
+@socketio.on('upgrade_gun')
+def on_upgrade_gun(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            cur = p["gun_level"]
+            nxt = cur + 1
+            if nxt >= len(GUN_LEVELS):
+                emit('error_msg', {"text": "Максимум"})
+                return
+            cost = GUN_LEVELS[nxt]["cost"]
+            if p["coins"] < cost:
+                emit('error_msg', {"text": f"Нужно {cost} очков"})
+                return
+            p["coins"] -= cost
+            p["gun_level"] = nxt
+            emit('gun_upgraded', {
+                "sid": sid,
+                "gun_level": nxt,
+                "my_coins": p["coins"],
+            }, to=code)
+            break
 
-  render();
-  updateBullets();
-</script>
-</body>
-</html>
+
+@socketio.on('shoot')
+def on_shoot(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
+                return
+            lvl = p["gun_level"]
+            gun = GUN_LEVELS[lvl]
+            mark_action(p)
+            emit('bullet_fired', {
+                "sid": sid,
+                "x": p["x"], "y": p["y"],
+                "dir": p["dir"],
+                "color": p["color"],
+                "dmg": gun["dmg"],
+                "bullets": gun["bullets"],
+                "pierce": gun["pierce"],
+                "gun_level": lvl,
+            }, to=code)
+            break
+
+
+@socketio.on('hit')
+def on_hit(data):
+    target_sid = data.get("target_sid")
+    dmg = data.get("dmg", 15)
+    for code, game in GAMES.items():
+        if target_sid in game["players"]:
+            p = game["players"][target_sid]
+            if p["hp"] <= 0:
+                break
+            p["hp"] = max(0, p["hp"] - dmg)
+            emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
+            if p["hp"] <= 0:
+                killer_sid = data.get("killer")
+                if killer_sid and killer_sid in game["players"]:
+                    game["players"][killer_sid]["coins"] += KILL_REWARD
+                    game["players"][killer_sid]["kills"] += 1
+                emit('player_died', {
+                    "sid": target_sid,
+                    "killer": killer_sid,
+                }, to=code)
+                alive = [s for s, pl in game["players"].items() if pl["hp"] > 0]
+                if len(alive) <= 1 and len(game["players"]) > 1:
+                    winner = game["players"].get(alive[0]) if alive else None
+                    emit('game_over', {
+                        "winner": winner["name"] if winner else "Ничья",
+                        "sid": alive[0] if alive else None,
+                    }, to=code)
+            break
+
+
+@socketio.on('hit_wall')
+def on_hit_wall(data):
+    wid = data.get("wall_id")
+    for code, game in GAMES.items():
+        if wid in game["walls"]:
+            w = game["walls"][wid]
+            w["hp"] -= 1
+            emit('wall_hit', {
+                "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
+            }, to=code)
+            if w["hp"] <= 0:
+                del game["walls"][wid]
+                emit('wall_destroyed', {
+                    "id": wid, "x": w["x"], "y": w["y"],
+                }, to=code)
+            break
+
+
+@socketio.on('hit_farm')
+def on_hit_farm(data):
+    fid = data.get("farm_id")
+    for code, game in GAMES.items():
+        if fid in game["farms"]:
+            f = game["farms"][fid]
+            f["hp"] -= 1
+            emit('farm_hit', {
+                "id": fid, "hp": f["hp"], "x": f["x"], "y": f["y"],
+            }, to=code)
+            if f["hp"] <= 0:
+                del game["farms"][fid]
+                emit('farm_destroyed', {
+                    "id": fid, "x": f["x"], "y": f["y"],
+                }, to=code)
+            break
+
+
+@socketio.on('disconnect')
+def on_disconnect():
+    sid = request.sid
+    for code, game in list(GAMES.items()):
+        if sid in game["players"]:
+            del game["players"][sid]
+            emit('player_left', {"sid": sid}, to=code)
+            if not game["players"]:
+                del GAMES[code]
+            elif sid == game.get("host") and game["players"]:
+                game["host"] = list(game["players"].keys())[0]
+            break
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port)
