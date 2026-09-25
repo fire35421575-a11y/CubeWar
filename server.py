@@ -148,7 +148,7 @@ def on_join(data):
         "dir": {"x": 1, "y": 0},
         "hp": 100,
         "max_hp": 100,
-        "coins": 0,
+        "coins": 20,
         "kills": 0,
         "gun_level": 0,
         "color": COLORS[idx % len(COLORS)],
