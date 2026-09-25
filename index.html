@@ -52,7 +52,7 @@
   .status { font-size: 12px; color: #666680; margin: 4px 0; text-align: center; }
 
   canvas {
-    background: #1a1a24; border-radius: 10px;
+    background: #fff; border-radius: 10px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.6);
     touch-action: none; width: 100%; max-width: 600px; height: auto;
     display: block;
@@ -97,6 +97,7 @@
   .hud .hp { color: #2ecc71; }
   .hud .actions { color: #9bb8ff; }
   .hud .timer { color: #f39c12; }
+  .hud .hp.low { color: #e74c3c; }
 </style>
 </head>
 <body>
@@ -127,7 +128,7 @@
 <!-- ИГРА -->
 <div class="screen" id="gameScreen">
   <div class="hud">
-    <span class="hp">HP <span id="hpView">100</span></span>
+    <span class="hp" id="hpWrap">HP <span id="hpView">100</span></span>
     <span class="actions">⚡ <span id="actionsView">10</span>/10</span>
     <span class="timer">⏱ <span id="timerView">--</span></span>
   </div>
@@ -197,6 +198,7 @@
   const lobbyStatus = $('lobbyStatus'), lobbyHint = $('lobbyHint'), startBtn = $('startBtn');
   const gamePlayers = $('gamePlayers'), canvas = $('canvas'), ctx = canvas.getContext('2d');
   const hpView = $('hpView'), actionsView = $('actionsView'), timerView = $('timerView');
+  const hpWrap = $('hpWrap');
 
   // автоподстановка имени
   if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
@@ -245,6 +247,7 @@
         p.x = data.x; p.y = data.y; p.dir = data.dir;
         p.actions_left = data.actions_left;
         render();
+        updateHUD();
       }
     });
 
@@ -254,6 +257,12 @@
         color: data.color, owner: data.sid, steps: 0,
       });
       spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 5);
+      // обновить действия стрелявшего
+      const p = players[data.sid];
+      if (p && data.actions_left !== undefined) {
+        p.actions_left = data.actions_left;
+      }
+      updateHUD();
     });
 
     socket.on('player_hit', (data) => {
@@ -294,7 +303,6 @@
 
     socket.on('wall_destroyed', (data) => {
       if (walls[data.id]) delete walls[data.id];
-      // осколки
       for (let i = 0; i < 20; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed = 2 + Math.random() * 5;
@@ -346,6 +354,15 @@
       menuStatus.textContent = data.text;
     });
 
+    socket.on('no_actions', () => {
+      // визуально показать, что действий нет
+      if (actionsView) {
+        actionsView.style.color = '#e74c3c';
+        setTimeout(() => { actionsView.style.color = ''; }, 500);
+      }
+      haptic('light');
+    });
+
     socket.on('disconnect', () => {
       menuStatus.textContent = 'Отключён';
       showScreen('menuScreen');
@@ -360,7 +377,7 @@
     ctx.textAlign = 'center';
     ctx.fillText(title, W/2, H/2 - 10);
     ctx.font = 'bold 26px Arial';
-    ctx.fillStyle = '#9bb8ff';
+    ctx.fillStyle = '#5a7fd8';
     ctx.fillText(subtitle, W/2, H/2 + 40);
   }
 
@@ -387,7 +404,10 @@
 
   function updateHUD() {
     if (me) {
-      hpView.textContent = me.hp || 100;
+      const hp = me.hp || 100;
+      hpView.textContent = hp;
+      if (hp <= 30) hpWrap.classList.add('low');
+      else hpWrap.classList.remove('low');
       actionsView.textContent = me.actions_left || 0;
     }
   }
@@ -444,13 +464,11 @@
     hitFlashes.push({ x, y, life: 1, radius: 10 });
   }
 
-  // === ФОН ===
+  // === ФОН — БЕЛЫЙ ===
   function drawGrid() {
-    // тёмный фон
-    ctx.fillStyle = '#1a1a24';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
-    // тонкая сетка
-    ctx.strokeStyle = '#22222e';
+    ctx.strokeStyle = '#e8e8ec';
     ctx.lineWidth = 1;
     for (let x = 0; x < W; x += 50) {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
@@ -460,58 +478,48 @@
     }
   }
 
-  // === КУБИК ===
+  // === КУБИК С ДУЛОМ ===
   function drawCube(p, isMe) {
     if (p.alive === false) return;
     const x = p.x - HALF, y = p.y - HALF;
 
     // тень
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
 
-    // тело кубика — градиент
+    // тело кубика
     const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
     grad.addColorStop(0, lighten(p.color, 20));
     grad.addColorStop(1, darken(p.color, 30));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, CUBE, CUBE);
 
-    // внутренняя рамка
-    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x + 4, y + 4, CUBE - 8, CUBE - 8);
-
-    // внешняя рамка
-    ctx.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,0.6)';
+    // обводка
+    ctx.strokeStyle = isMe ? '#000' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
 
-    // стрелка направления (вместо глаз)
-    const cx = p.x, cy = p.y;
+    // ДУЛО — ствол, смотрящий в сторону направления
     const dx = p.dir.x, dy = p.dir.y;
-    // небольшой треугольник внутри кубика
-    ctx.beginPath();
-    const size = 14;
-    if (dx === 1) {
-      ctx.moveTo(cx - 4, cy - size / 2);
-      ctx.lineTo(cx + 8, cy);
-      ctx.lineTo(cx - 4, cy + size / 2);
-    } else if (dx === -1) {
-      ctx.moveTo(cx + 4, cy - size / 2);
-      ctx.lineTo(cx - 8, cy);
-      ctx.lineTo(cx + 4, cy + size / 2);
-    } else if (dy === 1) {
-      ctx.moveTo(cx - size / 2, cy - 4);
-      ctx.lineTo(cx, cy + 8);
-      ctx.lineTo(cx + size / 2, cy - 4);
-    } else {
-      ctx.moveTo(cx - size / 2, cy + 4);
-      ctx.lineTo(cx, cy - 8);
-      ctx.lineTo(cx + size / 2, cy + 4);
-    }
-    ctx.closePath();
-    ctx.fillStyle = '#fff';
-    ctx.fill();
+    const barrelLen = 26;
+    const barrelW = 12;
+    const bx = p.x;
+    const by = p.y;
+
+    ctx.save();
+    ctx.translate(bx, by);
+    // поворот по направлению
+    const angle = Math.atan2(dy, dx);
+    ctx.rotate(angle);
+
+    // ствол
+    ctx.fillStyle = darken(p.color, 50);
+    ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
+    // кончик ствола (яркий)
+    ctx.fillStyle = '#222';
+    ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
+
+    ctx.restore();
 
     // HP бар
     const hpW = 54, hpH = 7;
@@ -528,10 +536,10 @@
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     const label = `${p.name}  ⚡${p.actions_left || 0}`;
-    ctx.strokeStyle = '#000';
+    ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.strokeText(label, p.x, p.y - HALF - 26);
-    ctx.fillStyle = p.color;
+    ctx.fillStyle = '#000';
     ctx.fillText(label, p.x, p.y - HALF - 26);
   }
 
@@ -543,18 +551,18 @@
       const hpRatio = Math.max(0, w.hp / 4);
 
       // тень
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
       ctx.fillRect(x + 3, y + 3, WALL_SIZE, WALL_SIZE);
 
       // тело
       const grad = ctx.createLinearGradient(x, y, x + WALL_SIZE, y + WALL_SIZE);
-      grad.addColorStop(0, '#5a7fd8');
-      grad.addColorStop(1, '#3a5f9a');
+      grad.addColorStop(0, '#7a8fb8');
+      grad.addColorStop(1, '#4a5f88');
       ctx.fillStyle = grad;
       ctx.fillRect(x, y, WALL_SIZE, WALL_SIZE);
 
       // кирпичики
-      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
       for (let i = 1; i < 3; i++) {
         ctx.beginPath();
@@ -569,14 +577,14 @@
       ctx.lineTo(x + WALL_SIZE / 2, y + WALL_SIZE);
       ctx.stroke();
 
-      // обводка
-      ctx.strokeStyle = hpRatio > 0.5 ? '#7a9ff8' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
+      // обводка — цвет по HP
+      ctx.strokeStyle = hpRatio > 0.5 ? '#2c3e50' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, WALL_SIZE, WALL_SIZE);
 
-      // трещины при повреждении
+      // трещины
       if (hpRatio < 0.75) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(x + 10, y + 5);
@@ -603,7 +611,6 @@
   // === ПУЛИ ===
   function drawBullets() {
     bullets.forEach(b => {
-      // хвост
       const tailX = b.x - b.dx * 20;
       const tailY = b.y - b.dy * 20;
       const grad = ctx.createLinearGradient(tailX, tailY, b.x, b.y);
@@ -616,7 +623,6 @@
       ctx.lineWidth = 6;
       ctx.stroke();
 
-      // свечение
       ctx.beginPath();
       ctx.arc(b.x, b.y, 14, 0, Math.PI * 2);
       ctx.fillStyle = b.color;
@@ -624,7 +630,6 @@
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // тело
       ctx.beginPath();
       ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
       ctx.fillStyle = '#fff';
@@ -657,7 +662,7 @@
       const f = wallFragments[i];
       f.x += f.vx; f.y += f.vy;
       f.vx *= 0.94; f.vy *= 0.94;
-      f.vy += 0.3; // гравитация
+      f.vy += 0.3;
       f.life -= 0.02;
       f.rot += f.vrot;
       if (f.life <= 0) { wallFragments.splice(i, 1); continue; }
@@ -713,7 +718,10 @@
 
   // === ДВИЖЕНИЕ ===
   function move(dir) {
-    if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
+    if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) {
+      if (me && me.actions_left <= 0) haptic('light');
+      return;
+    }
     haptic('light');
     moving = true;
     const dirs = {
@@ -749,14 +757,20 @@
   });
 
   document.getElementById('shootBtn').addEventListener('click', () => {
-    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
+    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) {
+      haptic('light');
+      return;
+    }
     haptic('shot');
     socket.emit('shoot', {});
     spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
   });
 
   document.getElementById('wallBtn').addEventListener('click', () => {
-    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
+    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) {
+      haptic('light');
+      return;
+    }
     haptic('light');
     socket.emit('place_wall', {});
   });
@@ -787,7 +801,6 @@
         });
       }
 
-      // проверка стен
       let hitWall = false;
       for (const wid in walls) {
         const w = walls[wid];
@@ -798,7 +811,6 @@
         }
       }
 
-      // проверка игроков
       let hitPlayer = false;
       if (!hitWall) {
         for (const sid in players) {
