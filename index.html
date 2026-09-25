@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>CubeWar</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #1a1a24;
+    color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px;
+    overflow: hidden;
+    touch-action: none;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 4px;
+    color: #9bb8ff;
+    text-transform: uppercase;
+    margin: 8px 0;
+  }
+  .screen {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 500px;
+  }
+  .screen.active { display: flex; }
+  input {
+    background: #2a2a36;
+    border: 1px solid #3a3a48;
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-size: 16px;
+    width: 100%;
+    margin: 8px 0;
+    outline: none;
+    font-family: inherit;
+    text-align: center;
+  }
+  input:focus { border-color: #9bb8ff; }
+  .big-btn {
+    background: #3a5fcd;
+    border: none;
+    color: #fff;
+    padding: 14px 24px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin: 8px 0;
+    transition: 0.15s;
+    font-family: inherit;
+  }
+  .big-btn:active { transform: scale(0.97); }
+  .big-btn.secondary { background: #2a2a36; color: #9bb8ff; }
+  .room-code {
+    background: #2a2a36;
+    border: 2px dashed #9bb8ff;
+    color: #9bb8ff;
+    padding: 16px;
+    border-radius: 12px;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    margin: 12px 0;
+    cursor: pointer;
+    user-select: all;
+    text-align: center;
+    width: 100%;
+  }
+  .hint {
+    font-size: 13px;
+    color: #6a6a78;
+    text-align: center;
+    margin: 8px 0;
+    line-height: 1.5;
+  }
+  canvas {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    touch-action: none;
+    width: 100%;
+    max-width: 500px;
+    height: auto;
+  }
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(3, 62px);
+    grid-template-rows: repeat(2, 62px);
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .btn {
+    background: #2a2a36;
+    border: 1px solid #3a3a48;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 24px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: 0.1s;
+  }
+  .btn:active { background: #3a3a48; transform: scale(0.94); }
+  .btn-up    { grid-column: 2; grid-row: 1; }
+  .btn-left  { grid-column: 1; grid-row: 2; }
+  .btn-down  { grid-column: 2; grid-row: 2; }
+  .btn-right { grid-column: 3; grid-row: 2; }
+
+  .players-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+    justify-content: center;
+    width: 100%;
+  }
+  .player-chip {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .status {
+    font-size: 13px;
+    color: #6a6a78;
+    margin: 4px 0;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<h1>CubeWar</h1>
+
+<!-- ЭКРАН 1: МЕНЮ -->
+<div class="screen active" id="menuScreen">
+  <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
+  <input type="text" id="nameInput" placeholder="Твоё имя" maxlength="12">
+  <button class="big-btn" id="createBtn">Создать комнату</button>
+  <input type="text" id="codeInput" placeholder="Код комнаты" maxlength="6" style="text-transform: uppercase;">
+  <button class="big-btn secondary" id="joinBtn">Присоединиться</button>
+  <div class="status" id="menuStatus"></div>
+</div>
+
+<!-- ЭКРАН 2: ЛОББИ -->
+<div class="screen" id="lobbyScreen">
+  <div class="hint">Код комнаты:</div>
+  <div class="room-code" id="roomCode">------</div>
+  <div class="hint">Скинь этот код друзьям. Когда все зашли — жми «Играть».</div>
+  <button class="big-btn" id="startBtn">Играть</button>
+  <div class="players-bar" id="lobbyPlayers"></div>
+  <div class="status" id="lobbyStatus"></div>
+</div>
+
+<!-- ЭКРАН 3: ИГРА -->
+<div class="screen" id="gameScreen">
+  <canvas id="canvas" width="600" height="600"></canvas>
+  <div class="players-bar" id="gamePlayers"></div>
+  <div class="controls">
+    <button class="btn btn-up" data-dir="up">↑</button>
+    <button class="btn btn-left" data-dir="left">←</button>
+    <button class="btn btn-down" data-dir="down">↓</button>
+    <button class="btn btn-right" data-dir="right">→</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+  // === НАСТРОЙКИ ===
+  const SERVER_URL = window.location.origin;  // тот же сервер
+  const W = 600, H = 600;
+  const CUBE = 50, HALF = CUBE / 2;
+  const STEP = 40, ANIM = 6;
+
+  // === СОСТОЯНИЕ ===
+  let socket = null;
+  let mySid = null;
+  let myColor = "#1a1a1a";
+  let myName = "";
+  let roomCode = "";
+  let players = {};  // sid -> {x, y, dir, name, color, hp}
+  let me = null;     // ссылка на мой объект в players
+
+  // === DOM ===
+  const menuScreen = document.getElementById('menuScreen');
+  const lobbyScreen = document.getElementById('lobbyScreen');
+  const gameScreen = document.getElementById('gameScreen');
+  const nameInput = document.getElementById('nameInput');
+  const codeInput = document.getElementById('codeInput');
+  const createBtn = document.getElementById('createBtn');
+  const joinBtn = document.getElementById('joinBtn');
+  const menuStatus = document.getElementById('menuStatus');
+  const roomCodeEl = document.getElementById('roomCode');
+  const lobbyPlayers = document.getElementById('lobbyPlayers');
+  const lobbyStatus = document.getElementById('lobbyStatus');
+  const gamePlayers = document.getElementById('gamePlayers');
+  const startBtn = document.getElementById('startBtn');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // === ЭКРАНЫ ===
+  function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  // === ПОДКЛЮЧЕНИЕ К СЕРВЕРУ ===
+  function connect() {
+    socket = io(SERVER_URL, {
+      transports: ['websocket', 'polling'],
+    });
+
+    socket.on('connect', () => {
+      mySid = socket.id;
+      console.log('подключено', mySid);
+    });
+
+    socket.on('game_created', (data) => {
+      roomCode = data.code;
+      myColor = data.color;
+      roomCodeEl.textContent = roomCode;
+      showScreen('lobbyScreen');
+      updateLobby();
+    });
+
+    socket.on('joined', (data) => {
+      roomCode = data.code;
+      myColor = data.my_color;
+      players = data.players;
+      me = players[mySid];
+      roomCodeEl.textContent = roomCode;
+      showScreen('lobbyScreen');
+      updateLobby();
+    });
+
+    socket.on('player_joined', (data) => {
+      players[data.sid] = data.player;
+      updateLobby();
+    });
+
+    socket.on('player_left', (data) => {
+      delete players[data.sid];
+      updateLobby();
+      render();
+    });
+
+    socket.on('player_moved', (data) => {
+      const p = players[data.sid];
+      if (p) {
+        p.x = data.x;
+        p.y = data.y;
+        p.dir = data.dir;
+        render();
+      }
+    });
+
+    socket.on('error_msg', (data) => {
+      menuStatus.textContent = data.text;
+    });
+
+    socket.on('disconnect', () => {
+      menuStatus.textContent = 'Отключён от сервера';
+      showScreen('menuScreen');
+    });
+  }
+
+  // === ЛОББИ ===
+  function updateLobby() {
+    lobbyPlayers.innerHTML = '';
+    const list = Object.values(players);
+    list.forEach(p => {
+      const chip = document.createElement('div');
+      chip.className = 'player-chip';
+      chip.style.background = p.color;
+      chip.textContent = p.name;
+      lobbyPlayers.appendChild(chip);
+    });
+    lobbyStatus.textContent = `Игроков: ${list.length}`;
+  }
+
+  // === СОЗДАТЬ / ПРИСОЕДИНИТЬСЯ ===
+  createBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
+    myName = name;
+    menuStatus.textContent = 'Создаём...';
+    if (!socket) connect();
+    setTimeout(() => {
+      socket.emit('create_game', { name });
+    }, 300);
+  });
+
+  joinBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    const code = codeInput.value.trim().toUpperCase();
+    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
+    if (!code) { menuStatus.textContent = 'Введи код комнаты'; return; }
+    myName = name;
+    menuStatus.textContent = 'Подключаемся...';
+    if (!socket) connect();
+    setTimeout(() => {
+      socket.emit('join_game', { name, code });
+    }, 300);
+  });
+
+  // === НАЧАТЬ ИГРУ ===
+  startBtn.addEventListener('click', () => {
+    showScreen('gameScreen');
+    render();
+  });
+
+  // === ОТРИСОВКА ===
+  function drawGrid() {
+    ctx.fillStyle = '#f8f8fa';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#e8e8ec';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+  }
+
+  function drawCube(p, isMe) {
+    // тень
+    ctx.fillStyle = 'rgba(0,0,0,0.1)';
+    ctx.fillRect(p.x - HALF + 3, p.y - HALF + 3, CUBE, CUBE);
+
+    // тело
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - HALF, p.y - HALF, CUBE, CUBE);
+    ctx.strokeStyle = isMe ? '#000' : '#555';
+    ctx.lineWidth = isMe ? 3 : 2;
+    ctx.strokeRect(p.x - HALF, p.y - HALF, CUBE, CUBE);
+
+    // линия взгляда
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + p.dir.x * (HALF + 20), p.y + p.dir.y * (HALF + 20));
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    // HP bar
+    const hpW = 50, hpH = 6;
+    const ratio = Math.max(0, (p.hp || 100) / 100);
+    ctx.fillStyle = '#ddd';
+    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW, hpH);
+    ctx.fillStyle = ratio > 0.6 ? '#27ae60' : (ratio > 0.3 ? '#f39c12' : '#c0392b');
+    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW * ratio, hpH);
+
+    // ник
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.name, p.x, p.y - HALF - 22);
+  }
+
+  function render() {
+    drawGrid();
+    for (const sid in players) {
+      if (sid === mySid) continue;
+      drawCube(players[sid], false);
+    }
+    if (me) drawCube(me, true);
+  }
+
+  // === ДВИЖЕНИЕ ===
+  let moving = false;
+  function move(dir) {
+    if (moving || !me) return;
+    moving = true;
+    const dirs = {
+      up:    { x: 0, y: -1 },
+      down:  { x: 0, y: 1 },
+      left:  { x: -1, y: 0 },
+      right: { x: 1, y: 0 },
+    };
+    const d = dirs[dir];
+    me.dir = d;
+
+    const tx = Math.max(HALF, Math.min(W - HALF, me.x + d.x * STEP));
+    const ty = Math.max(HALF, Math.min(H - HALF, me.y + d.y * STEP));
+    const sx = me.x, sy = me.y;
+    const dx = tx - sx, dy = ty - sy;
+
+    let i = 0;
+    function step() {
+      i++;
+      if (i > ANIM) {
+        me.x = tx; me.y = ty;
+        moving = false;
+        render();
+        if (socket) socket.emit('move', { x: me.x, y: me.y, dir: me.dir });
+        return;
+      }
+      const t = i / ANIM;
+      me.x = sx + dx * t;
+      me.y = sy + dy * t;
+      render();
+      requestAnimationFrame(step);
+    }
+    step();
+  }
+
+  // === КНОПКИ ===
+  document.querySelectorAll('.btn').forEach(btn => {
+    btn.addEventListener('click', () => move(btn.dataset.dir));
+  });
+
+  // === КЛАВИАТУРА ===
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp') move('up');
+    else if (e.key === 'ArrowDown') move('down');
+    else if (e.key === 'ArrowLeft') move('left');
+    else if (e.key === 'ArrowRight') move('right');
+  });
+
+  // === СВАЙПЫ ===
+  let touchStart = null;
+  canvas.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+  }, { passive: true });
+  canvas.addEventListener('touchend', (e) => {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    if (Math.max(ax, ay) < 30) { touchStart = null; return; }
+    if (ax > ay) move(dx > 0 ? 'right' : 'left');
+    else move(dy > 0 ? 'down' : 'up');
+    touchStart = null;
+  }, { passive: true });
+
+  render();
+</script>
+</body>
+</html>
