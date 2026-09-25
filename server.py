@@ -29,12 +29,10 @@ def get_spawn(idx):
     return positions[idx % len(positions)]
 
 
-def check_wall_collision(game, x, y, ignore_id=None):
+def check_wall_collision(game, x, y):
     half = 25
-    for wid, w in game["walls"].items():
+    for w in game["walls"].values():
         if w["hp"] <= 0:
-            continue
-        if wid == ignore_id:
             continue
         wx, wy = w["x"], w["y"]
         if (x + half > wx - 25 and x - half < wx + 25 and
@@ -133,7 +131,6 @@ def on_start_round(data):
         return
     game = GAMES[code]
     if request.sid != game["host"]:
-        emit('error_msg', {"text": "Только хост"})
         return
     if game.get("round_active"):
         return
@@ -185,9 +182,13 @@ def on_move(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("round_active"):
+            if p["hp"] <= 0:
+                return
+            if not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
+                # важно: сообщаем клиенту, что действий нет
+                emit('no_actions', {}, to=sid)
                 return
             nx = data.get("x", p["x"])
             ny = data.get("y", p["y"])
@@ -214,22 +215,19 @@ def on_place_wall(data):
             if p["hp"] <= 0 or not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
+                emit('no_actions', {}, to=sid)
                 return
             wx = p["x"] - p["dir"]["x"] * 50
             wy = p["y"] - p["dir"]["y"] * 50
             wx = max(25, min(W - 25, wx))
             wy = max(25, min(H - 25, wy))
-            # не на игрока
             for other in game["players"].values():
                 if other["hp"] <= 0:
                     continue
                 if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
-                    emit('error_msg', {"text": "Тут игрок"})
                     return
-            # не на стену
             if check_wall_collision(game, wx, wy):
                 return
-
             game["wall_id"] = game.get("wall_id", 0) + 1
             wid = str(game["wall_id"])
             game["walls"][wid] = {
@@ -254,6 +252,7 @@ def on_shoot(data):
             if p["hp"] <= 0 or not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
+                emit('no_actions', {}, to=sid)
                 return
             p["actions_left"] -= 1
             emit('bullet_fired', {
