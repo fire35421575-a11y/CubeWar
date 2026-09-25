@@ -325,19 +325,15 @@
       render();
     });
 
-    // ВАЖНО: tick_update теперь приходит ПЕРСОНАЛЬНО
     socket.on('tick_update', (data) => {
-      // мои данные
       if (data.my_coins !== undefined) myCoins = data.my_coins;
       if (data.my_hp !== undefined) myHp = data.my_hp;
       if (data.my_kills !== undefined) myKills = data.my_kills;
-      // обновляем меня в players
       if (me) {
         me.coins = myCoins;
         me.hp = myHp;
         me.kills = myKills;
       }
-      // HP других
       if (data.others) {
         for (const sid in data.others) {
           if (players[sid]) {
@@ -474,13 +470,19 @@
       render();
     });
 
+    // ✅ ФИКС: мгновенно прибавляем очки
     socket.on('farm_income', (data) => {
       floatingTexts.push({
         x: data.x, y: data.y - 30,
-        text: '+1',
+        text: '+' + (data.amount || 1),
         color: '#f1c40f',
         life: 1.5, vy: -1.2,
       });
+      if (data.owner === mySid) {
+        myCoins += (data.amount || 1);
+        if (me) me.coins = myCoins;
+        updateHUD();
+      }
     });
 
     socket.on('gun_upgraded', (data) => {
