@@ -28,7 +28,6 @@ KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
 
-# уровни дула
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
     {"name": "Двойной",  "dmg": 15, "bullets": 2, "cost": 15,  "pierce": False},
@@ -43,7 +42,6 @@ def generate_code():
 
 
 def get_spawns(count):
-    """Возвращает список из count позиций, далеко друг от друга."""
     all_positions = [
         (80, 80), (W - 80, 80), (80, H - 80), (W - 80, H - 80),
         (W // 2, 80), (W // 2, H - 80), (80, H // 2), (W - 80, H // 2),
@@ -205,19 +203,17 @@ def on_start_game(data):
     if len(players) < 2:
         emit('error_msg', {"text": "Минимум 2 игрока"})
         return
-    # все готовы?
     not_ready = [p["name"] for p in players.values() if not p.get("ready")]
     if not_ready:
         emit('error_msg', {"text": "Не все готовы: " + ", ".join(not_ready)})
         return
 
-    # старт
     game["started"] = True
     spawns = get_spawns(len(players))
     for i, (sid, p) in enumerate(players.items()):
         p["x"], p["y"] = spawns[i]
         p["hp"] = 100
-        p["coins"] = 0
+        p["coins"] = 20
         p["kills"] = 0
         p["gun_level"] = 0
         p["last_passive"] = time.time()
@@ -233,7 +229,6 @@ def on_start_game(data):
 
 
 def passive_loop(code):
-    """Каждые PASSIVE_INCOME_TIME сек — +1 очко всем. Каждые REGEN_TIME — +2 HP."""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -242,14 +237,12 @@ def passive_loop(code):
         if not g.get("started"):
             return
         now = time.time()
-        # пассивный доход
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
             if now - p.get("last_passive", 0) >= PASSIVE_INCOME_TIME:
                 p["coins"] += PASSIVE_INCOME
                 p["last_passive"] = now
-        # реген
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -257,7 +250,6 @@ def passive_loop(code):
                 if p["hp"] < p["max_hp"]:
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
-        # доход с ферм
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
                 del g["farms"][fid]
@@ -266,7 +258,6 @@ def passive_loop(code):
                 owner_sid = farm["owner"]
                 if owner_sid in g["players"]:
                     g["players"][owner_sid]["coins"] += FARM_INCOME
-                    # уведомление
                     emit('farm_income', {
                         "id": fid,
                         "x": farm["x"],
@@ -274,7 +265,6 @@ def passive_loop(code):
                         "amount": FARM_INCOME,
                     }, to=code)
                 farm["last_income"] = now
-        # отдаём общий апдейт
         emit('tick_update', {
             "players": {s: {"coins": p["coins"], "hp": p["hp"]} for s, p in g["players"].items()}
         }, to=code)
@@ -454,7 +444,6 @@ def on_hit(data):
             p["hp"] = max(0, p["hp"] - dmg)
             emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
             if p["hp"] <= 0:
-                # кто-то получил килл
                 killer_sid = data.get("killer")
                 if killer_sid and killer_sid in game["players"]:
                     game["players"][killer_sid]["coins"] += KILL_REWARD
@@ -463,7 +452,6 @@ def on_hit(data):
                     "sid": target_sid,
                     "killer": killer_sid,
                 }, to=code)
-                # победа?
                 alive = [s for s, pl in game["players"].items() if pl["hp"] > 0]
                 if len(alive) <= 1:
                     winner = game["players"].get(alive[0]) if alive else None
