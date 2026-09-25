@@ -227,6 +227,7 @@ def on_start_game(data):
 
 
 def passive_loop(code):
+    """Каждую секунду проверяем доход, реген, очки ферм."""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -236,6 +237,7 @@ def passive_loop(code):
             return
         now = time.time()
 
+        # Пассивный доход
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -243,6 +245,7 @@ def passive_loop(code):
                 p["coins"] += PASSIVE_INCOME
                 p["last_passive"] = now
 
+        # Регенерация
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -251,23 +254,26 @@ def passive_loop(code):
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
 
+        # Доход с ферм — ИСПРАВЛЕНО
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
                 del g["farms"][fid]
                 continue
             if now - farm.get("last_income", 0) >= FARM_INCOME_TIME:
-                owner_sid = farm["owner"]
-                if owner_sid in g["players"]:
+                owner_sid = farm.get("owner")
+                if owner_sid and owner_sid in g["players"]:
                     g["players"][owner_sid]["coins"] += FARM_INCOME
+                    print(f"[FARM INCOME] farm {fid} -> {g['players'][owner_sid]['name']} +{FARM_INCOME}")
                     emit('farm_income', {
                         "id": fid,
                         "x": farm["x"],
                         "y": farm["y"],
                         "amount": FARM_INCOME,
+                        "owner": owner_sid,
                     }, to=code)
                 farm["last_income"] = now
 
-        # каждый игрок получает ТОЛЬКО СВОИ данные + чужое HP
+        # Персональный tick для каждого
         for sid in g["players"]:
             p = g["players"][sid]
             emit('tick_update', {
@@ -328,7 +334,6 @@ def on_place_wall(data):
             wy = p["y"] - p["dir"]["y"] * 50
             wx = max(25, min(W - 25, wx))
             wy = max(25, min(H - 25, wy))
-            # исключаем СЕБЯ из проверки
             for other_sid, other in game["players"].items():
                 if other_sid == sid:
                     continue
@@ -368,7 +373,6 @@ def on_place_farm(data):
             wy = p["y"] - p["dir"]["y"] * 50
             wx = max(40, min(W - 40, wx))
             wy = max(40, min(H - 40, wy))
-            # исключаем СЕБЯ
             for other_sid, other in game["players"].items():
                 if other_sid == sid:
                     continue
@@ -392,6 +396,7 @@ def on_place_farm(data):
                 "last_income": time.time(),
             }
             p["coins"] -= FARM_COST
+            print(f"[FARM PLACED] {p['name']} farm {fid} at {wx},{wy}")
             emit('farm_placed', {
                 "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
                 "my_coins": p["coins"],
