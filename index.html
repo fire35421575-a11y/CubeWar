@@ -325,23 +325,29 @@
       render();
     });
 
+    // ✅ tick_update — теперь просто словарь всех игроков
     socket.on('tick_update', (data) => {
-      if (data.my_coins !== undefined) myCoins = data.my_coins;
-      if (data.my_hp !== undefined) myHp = data.my_hp;
-      if (data.my_kills !== undefined) myKills = data.my_kills;
-      if (me) {
-        me.coins = myCoins;
-        me.hp = myHp;
-        me.kills = myKills;
-      }
-      if (data.others) {
-        for (const sid in data.others) {
+      if (data.players) {
+        for (const sid in data.players) {
           if (players[sid]) {
-            players[sid].hp = data.others[sid].hp;
+            players[sid].coins = data.players[sid].coins;
+            players[sid].hp = data.players[sid].hp;
+            if (data.players[sid].kills !== undefined) {
+              players[sid].kills = data.players[sid].kills;
+            }
           }
         }
+        // обновляем свои данные
+        if (me && players[mySid]) {
+          myCoins = players[mySid].coins;
+          myHp = players[mySid].hp;
+          myKills = players[mySid].kills;
+          me.coins = myCoins;
+          me.hp = myHp;
+          me.kills = myKills;
+        }
+        updateHUD();
       }
-      updateHUD();
     });
 
     socket.on('player_moved', (data) => {
@@ -470,7 +476,6 @@
       render();
     });
 
-    // ✅ ФИКС: мгновенно прибавляем очки
     socket.on('farm_income', (data) => {
       floatingTexts.push({
         x: data.x, y: data.y - 30,
