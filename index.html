@@ -141,6 +141,8 @@
   let timeLeft = 0;
   let timerInterval = null;
   let bullets = [];
+  let particles = [];
+  let hitFlashes = [];
   let moving = false;
 
   const menuScreen = document.getElementById('menuScreen');
@@ -168,6 +170,7 @@
     document.getElementById(id).classList.add('active');
   }
 
+  // === ПОДКЛЮЧЕНИЕ ===
   function connect() {
     socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
 
@@ -203,7 +206,6 @@
         p.x = data.x; p.y = data.y; p.dir = data.dir;
         p.actions_left = data.actions_left;
         render();
-        updateHUD();
       }
     });
 
@@ -212,34 +214,59 @@
         x: data.x, y: data.y, dx: data.dir.x, dy: data.dir.y,
         color: data.color, owner: data.sid, steps: 0,
       });
+      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 6);
     });
 
     socket.on('player_hit', (data) => {
       const p = players[data.sid];
-      if (p) { p.hp = data.hp; render(); updateHUD(); }
+      if (p) {
+        p.hp = data.hp;
+        spawnParticles(p.x, p.y, '#ff4444', 14);
+        spawnFlash(p.x, p.y);
+        render();
+        updateHUD();
+      }
     });
 
     socket.on('player_died', (data) => {
       const p = players[data.sid];
-      if (p) { p.hp = 0; p.alive = false; render(); }
+      if (p) {
+        p.hp = 0; p.alive = false;
+        spawnParticles(p.x, p.y, p.color, 25);
+        spawnFlash(p.x, p.y);
+        render();
+      }
     });
 
     socket.on('round_started', (data) => {
       roundActive = true;
       timeLeft = data.round_time;
       actionsPerRound = data.actions_per_round;
-      Object.values(players).forEach(p => p.actions_left = actionsPerRound);
+      Object.values(players).forEach(p => {
+        if (p.hp > 0) p.actions_left = actionsPerRound;
+      });
       startTimer();
       showScreen('gameScreen');
       updateHUD();
       render();
     });
 
-    socket.on('round_ended', () => {
+    socket.on('round_ended', (data) => {
       roundActive = false;
       if (timerInterval) clearInterval(timerInterval);
-      timerView.textContent = '--';
-      updateHUD();
+      timeLeft = data.pause || 3;
+      timerView.textContent = timeLeft;
+      // показать паузу
+      render();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, H/2 - 70, W, 140);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 42px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('КОНЕЦ РАУНДА', W/2, H/2 - 10);
+      ctx.font = 'bold 28px Arial';
+      ctx.fillStyle = '#9bb8ff';
+      ctx.fillText('Новый через ' + timeLeft + ' сек', W/2, H/2 + 40);
     });
 
     socket.on('error_msg', (data) => {
@@ -314,6 +341,27 @@
     if (socket) socket.emit('start_round', { code: roomCode });
   });
 
+  // === ЧАСТИЦЫ ===
+  function spawnParticles(x, y, color, count = 8) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 4;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        color,
+        size: 3 + Math.random() * 3,
+      });
+    }
+  }
+
+  function spawnFlash(x, y) {
+    hitFlashes.push({ x, y, life: 1, radius: 10 });
+  }
+
+  // === ОТРИСОВКА ===
   function drawGrid() {
     ctx.fillStyle = '#f8f8fa';
     ctx.fillRect(0, 0, W, H);
@@ -327,48 +375,154 @@
     }
   }
 
+  function shadeColor(color, percent) {
+    const num = parseInt(color.replace('#',''), 16);
+    let r = (num >> 16) + percent;
+    let g = ((num >> 8) & 0x00FF) + percent;
+    let b = (num & 0x0000FF) + percent;
+    r = Math.max(0, Math.min(255, r));
+    g = Math.max(0, Math.min(255, g));
+    b = Math.max(0, Math.min(255, b));
+    return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+  }
+
   function drawCube(p, isMe) {
     if (p.alive === false) return;
+    const x = p.x - HALF, y = p.y - HALF;
 
-    ctx.fillStyle = 'rgba(0,0,0,0.1)';
-    ctx.fillRect(p.x - HALF + 3, p.y - HALF + 3, CUBE, CUBE);
+    // тень
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
 
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - HALF, p.y - HALF, CUBE, CUBE);
-    ctx.strokeStyle = isMe ? '#000' : '#555';
+    // тело с градиентом
+    const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
+    grad.addColorStop(0, p.color);
+    grad.addColorStop(1, shadeColor(p.color, -40));
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, CUBE, CUBE);
+
+    // обводка
+    ctx.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = isMe ? 3 : 2;
-    ctx.strokeRect(p.x - HALF, p.y - HALF, CUBE, CUBE);
+    ctx.strokeRect(x, y, CUBE, CUBE);
 
+    // глаза
+    ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x + p.dir.x * (HALF + 20), p.y + p.dir.y * (HALF + 20));
-    ctx.strokeStyle = p.color;
-    ctx.lineWidth = 4;
+    ctx.arc(p.x - 8, p.y - 6, 5, 0, Math.PI * 2);
+    ctx.arc(p.x + 8, p.y - 6, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // зрачки
+    const px = p.dir.x * 2, py = p.dir.y * 2;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(p.x - 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
+    ctx.arc(p.x + 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // рот
+    ctx.beginPath();
+    ctx.arc(p.x, p.y + 10, 6, 0.2 * Math.PI, 0.8 * Math.PI);
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
+    // линия взгляда
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + p.dir.x * (HALF + 25), p.y + p.dir.y * (HALF + 25));
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.6;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // HP bar
     const hpW = 50, hpH = 6;
     const ratio = Math.max(0, (p.hp || 100) / 100);
-    ctx.fillStyle = '#ddd';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(p.x - hpW / 2 - 2, p.y - HALF - 18, hpW + 4, hpH + 4);
+    ctx.fillStyle = '#333';
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW, hpH);
     ctx.fillStyle = ratio > 0.6 ? '#27ae60' : (ratio > 0.3 ? '#f39c12' : '#c0392b');
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW * ratio, hpH);
 
-    ctx.fillStyle = p.color;
-    ctx.font = 'bold 12px Arial';
+    // ник с обводкой
+    ctx.font = 'bold 13px Arial';
     ctx.textAlign = 'center';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.strokeText(p.name, p.x, p.y - HALF - 22);
+    ctx.fillStyle = p.color;
     ctx.fillText(p.name, p.x, p.y - HALF - 22);
   }
 
   function drawBullets() {
     bullets.forEach(b => {
+      // хвост
+      const tailX = b.x - b.dx * 18;
+      const tailY = b.y - b.dy * 18;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // свечение
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 12, 0, Math.PI * 2);
+      ctx.fillStyle = b.color;
+      ctx.globalAlpha = 0.25;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // тело
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 7, 0, Math.PI * 2);
       ctx.fillStyle = b.color;
       ctx.fill();
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
       ctx.stroke();
     });
+  }
+
+  function drawParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.95;
+      p.vy *= 0.95;
+      p.life -= 0.03;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.life;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawFlashes() {
+    for (let i = hitFlashes.length - 1; i >= 0; i--) {
+      const f = hitFlashes[i];
+      f.life -= 0.06;
+      f.radius += 5;
+      if (f.life <= 0) { hitFlashes.splice(i, 1); continue; }
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 5;
+      ctx.globalAlpha = f.life;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
 
   function render() {
@@ -379,10 +533,13 @@
     }
     if (me) drawCube(me, true);
     drawBullets();
+    drawParticles();
+    drawFlashes();
   }
 
+  // === ДВИЖЕНИЕ ===
   function move(dir) {
-    if (moving || !me || !roundActive || me.actions_left <= 0) return;
+    if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
     moving = true;
     const dirs = {
       up:    { x: 0, y: -1 }, down:  { x: 0, y: 1 },
@@ -419,8 +576,10 @@
   });
 
   document.getElementById('shootBtn').addEventListener('click', () => {
-    if (!me || !roundActive || me.actions_left <= 0) return;
+    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
     socket.emit('shoot', {});
+    // локальная вспышка
+    spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
   });
 
   document.addEventListener('keydown', (e) => {
@@ -431,13 +590,26 @@
     else if (e.key === ' ') { e.preventDefault(); document.getElementById('shootBtn').click(); }
   });
 
+  // === ПУЛИ ===
   function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.dx * BULLET_STEP;
       b.y += b.dy * BULLET_STEP;
       b.steps++;
-      // проверка попадания
+
+      // искры от пули
+      if (b.steps % 2 === 0) {
+        particles.push({
+          x: b.x, y: b.y,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2,
+          life: 0.6,
+          color: b.color,
+          size: 3,
+        });
+      }
+
       let hit = false;
       for (const sid in players) {
         if (sid === b.owner) continue;
@@ -454,10 +626,10 @@
         bullets.splice(i, 1);
       }
     }
-    root_render_loop();
+    renderLoop();
   }
 
-  function root_render_loop() {
+  function renderLoop() {
     render();
     requestAnimationFrame(updateBullets);
   }
