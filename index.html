@@ -21,7 +21,6 @@
   }
   .screen { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 600px; }
   .screen.active { display: flex; }
-
   input {
     background: #1c1c26; border: 1px solid #2e2e3c; color: #fff;
     padding: 14px 16px; border-radius: 10px; font-size: 15px;
@@ -29,7 +28,6 @@
     text-align: center; transition: 0.15s;
   }
   input:focus { border-color: #5a7fd8; background: #202030; }
-
   .big-btn {
     background: linear-gradient(180deg, #4a6fd8, #3a5fcd);
     border: none; color: #fff; padding: 14px 20px; border-radius: 10px;
@@ -42,24 +40,20 @@
   .big-btn:disabled { background: #1c1c26; color: #555; cursor: default; text-transform: none; letter-spacing: 0; }
   .big-btn.green { background: linear-gradient(180deg, #2ecc71, #27ae60); }
   .big-btn.ready { background: linear-gradient(180deg, #27ae60, #1e8449); }
-
   .room-code {
     background: #1c1c26; border: 2px dashed #5a7fd8; color: #9bb8ff;
     padding: 16px; border-radius: 10px; font-size: 28px; font-weight: 800;
     letter-spacing: 8px; margin: 10px 0; user-select: all; text-align: center;
     width: 100%; font-family: 'Courier New', monospace;
   }
-
   .hint { font-size: 12px; color: #666680; text-align: center; margin: 6px 0; line-height: 1.5; }
   .status { font-size: 12px; color: #666680; margin: 4px 0; text-align: center; }
-
   canvas {
     background: #fff; border-radius: 10px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.6);
     touch-action: none; width: 100%; max-width: 600px; height: auto;
     display: block;
   }
-
   .controls {
     display: grid;
     grid-template-columns: repeat(5, 58px);
@@ -96,17 +90,14 @@
     font-weight: 700; color: #fff; letter-spacing: 0.5px;
     display: flex; align-items: center; gap: 6px;
   }
-  .player-chip .check {
-    font-size: 12px; opacity: 0.5;
-  }
-  .player-chip.ready .check {
-    opacity: 1; color: #2ecc71;
-  }
+  .player-chip .check { font-size: 12px; opacity: 0.5; }
+  .player-chip.ready .check { opacity: 1; color: #2ecc71; }
 
   .hud {
     display: flex; gap: 12px; margin: 8px 0; font-size: 13px;
     font-weight: 700; align-items: center; padding: 8px 14px;
     background: #1c1c26; border-radius: 10px; border: 1px solid #2e2e3c;
+    min-width: 380px; justify-content: center;
   }
   .hud .hp { color: #2ecc71; }
   .hud .hp.low { color: #e74c3c; }
@@ -115,7 +106,6 @@
   .hud .cd { color: #f39c12; min-width: 70px; text-align: center; }
   .hud .cd.ready { color: #2ecc71; }
 
-  /* Победа */
   #winBanner {
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%) scale(0.5);
@@ -140,7 +130,6 @@
 
 <h1>CUBE WAR</h1>
 
-<!-- МЕНЮ -->
 <div class="screen active" id="menuScreen">
   <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
   <input type="text" id="nameInput" placeholder="Твоё имя" maxlength="12">
@@ -151,7 +140,6 @@
   <div class="status" id="menuStatus"></div>
 </div>
 
-<!-- ЛОББИ -->
 <div class="screen" id="lobbyScreen">
   <div class="hint">Код комнаты:</div>
   <div class="room-code" id="roomCode">------</div>
@@ -162,11 +150,10 @@
   <div class="status" id="lobbyStatus"></div>
 </div>
 
-<!-- ИГРА -->
 <div class="screen" id="gameScreen">
   <div class="hud">
     <span class="hp" id="hpWrap">❤️ <span id="hpView">100</span></span>
-    <span class="coins">💰 <span id="coinsView">0</span></span>
+    <span class="coins">💰 <span id="coinsView">20</span></span>
     <span class="kills">💀 <span id="killsView">0</span></span>
     <span class="cd ready" id="cdView">КД: 0.0</span>
   </div>
@@ -185,7 +172,6 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-  // === TELEGRAM SDK ===
   const tg = window.Telegram?.WebApp;
   if (tg) {
     tg.ready();
@@ -203,7 +189,6 @@
     } catch(e) {}
   }
 
-  // === КОНСТАНТЫ ===
   const W = 800, H = 800;
   const CUBE = 50, HALF = CUBE / 2;
   const STEP = 50, ANIM = 6;
@@ -216,6 +201,9 @@
   let roomCode = "";
   let players = {};
   let me = null;
+  let myCoins = 20;
+  let myHp = 100;
+  let myKills = 0;
   let walls = {};
   let farms = {};
   let GUN_LEVELS = [];
@@ -294,6 +282,11 @@
       WALL_COST = data.wall_cost || 10;
       COOLDOWN = data.cooldown || 0.5;
       me = players[mySid];
+      if (me) {
+        myCoins = me.coins;
+        myHp = me.hp;
+        myKills = me.kills;
+      }
       roomCodeEl.textContent = roomCode;
       showScreen('lobbyScreen');
       updateLobby();
@@ -321,16 +314,35 @@
       walls = data.walls || {};
       farms = data.farms || {};
       me = players[mySid];
+      if (me) {
+        myCoins = me.coins;
+        myHp = me.hp;
+        myKills = me.kills;
+      }
       gameStarted = true;
+      updateHUD();
       showScreen('gameScreen');
       render();
     });
 
+    // ВАЖНО: tick_update теперь приходит ПЕРСОНАЛЬНО
     socket.on('tick_update', (data) => {
-      for (const sid in data.players) {
-        if (players[sid]) {
-          players[sid].coins = data.players[sid].coins;
-          players[sid].hp = data.players[sid].hp;
+      // мои данные
+      if (data.my_coins !== undefined) myCoins = data.my_coins;
+      if (data.my_hp !== undefined) myHp = data.my_hp;
+      if (data.my_kills !== undefined) myKills = data.my_kills;
+      // обновляем меня в players
+      if (me) {
+        me.coins = myCoins;
+        me.hp = myHp;
+        me.kills = myKills;
+      }
+      // HP других
+      if (data.others) {
+        for (const sid in data.others) {
+          if (players[sid]) {
+            players[sid].hp = data.others[sid].hp;
+          }
         }
       }
       updateHUD();
@@ -345,7 +357,6 @@
     });
 
     socket.on('bullet_fired', (data) => {
-      // если несколько пуль — веером
       const count = data.bullets || 1;
       const baseAngle = Math.atan2(data.dir.y, data.dir.x);
       const spread = 0.15;
@@ -364,15 +375,20 @@
     });
 
     socket.on('player_hit', (data) => {
+      if (data.sid === mySid) {
+        myHp = data.hp;
+      } else {
+        const p = players[data.sid];
+        if (p) p.hp = data.hp;
+      }
       const p = players[data.sid];
       if (p) {
-        p.hp = data.hp;
         spawnParticles(p.x, p.y, '#ff4040', 12);
         spawnFlash(p.x, p.y);
-        haptic('hit');
-        render();
-        updateHUD();
       }
+      haptic('hit');
+      render();
+      updateHUD();
     });
 
     socket.on('player_died', (data) => {
@@ -384,7 +400,6 @@
         render();
       }
       if (data.sid === mySid) {
-        // я умер
         setTimeout(() => {
           showScreen('menuScreen');
           winBanner.classList.remove('show');
@@ -394,7 +409,8 @@
 
     socket.on('wall_placed', (data) => {
       walls[data.id] = { x: data.x, y: data.y, hp: data.hp };
-      if (me && data.coins !== undefined) me.coins = data.coins;
+      if (data.my_coins !== undefined) myCoins = data.my_coins;
+      if (me) me.coins = myCoins;
       spawnParticles(data.x, data.y, '#5a7fd8', 10);
       render();
       updateHUD();
@@ -423,8 +439,15 @@
 
     socket.on('farm_placed', (data) => {
       farms[data.id] = { x: data.x, y: data.y, hp: data.hp, last_income: 0 };
-      if (me && data.coins !== undefined) me.coins = data.coins;
+      if (data.my_coins !== undefined) myCoins = data.my_coins;
+      if (me) me.coins = myCoins;
       spawnParticles(data.x, data.y, '#f1c40f', 15);
+      floatingTexts.push({
+        x: data.x, y: data.y - 40,
+        text: '🏭',
+        color: '#f1c40f',
+        life: 1.5, vy: -1.5,
+      });
       render();
       updateHUD();
     });
@@ -461,16 +484,22 @@
     });
 
     socket.on('gun_upgraded', (data) => {
-      if (players[data.sid]) {
-        players[data.sid].gun_level = data.gun_level;
-        players[data.sid].coins = data.coins;
-      }
-      if (data.sid === mySid && GUN_LEVELS[data.gun_level]) {
-        floatingTexts.push({
-          x: me.x, y: me.y - 40,
-          text: GUN_LEVELS[data.gun_level].name,
-          color: '#e67e22', life: 2, vy: -0.8,
-        });
+      if (data.sid === mySid) {
+        if (data.my_coins !== undefined) myCoins = data.my_coins;
+        if (me) {
+          me.gun_level = data.gun_level;
+          me.coins = myCoins;
+        }
+        if (GUN_LEVELS[data.gun_level]) {
+          floatingTexts.push({
+            x: me.x, y: me.y - 40,
+            text: GUN_LEVELS[data.gun_level].name,
+            color: '#e67e22', life: 2, vy: -0.8,
+          });
+        }
+      } else {
+        const p = players[data.sid];
+        if (p) p.gun_level = data.gun_level;
       }
       updateHUD();
     });
@@ -485,10 +514,9 @@
 
     socket.on('error_msg', (data) => {
       menuStatus.textContent = data.text;
-      // показать в HUD тоже
-      if (gameStarted) {
+      if (gameStarted && me) {
         floatingTexts.push({
-          x: me ? me.x : W/2, y: me ? me.y - 40 : H/2,
+          x: me.x, y: me.y - 40,
           text: data.text, color: '#e74c3c', life: 1.5, vy: -0.6,
         });
       }
@@ -518,9 +546,7 @@
     });
     lobbyStatus.textContent = `Игроков: ${list.length} / 4`;
 
-    // все ли готовы?
     const allReady = list.length >= 2 && list.every(p => p.ready);
-    const isHost = players[mySid] && roomCode && (Object.keys(players)[0] === mySid);
     startBtn.disabled = !allReady;
     if (!allReady) {
       const notReady = list.filter(p => !p.ready).map(p => p.name);
@@ -533,21 +559,17 @@
       startBtn.textContent = '▶️ Начать игру';
     }
 
-    // моя кнопка готовности
     if (players[mySid]) {
       readyBtn.textContent = players[mySid].ready ? '❌ Отменить готовность' : '✅ Я готов';
     }
   }
 
   function updateHUD() {
-    if (me) {
-      const hp = me.hp || 100;
-      hpView.textContent = hp;
-      if (hp <= 30) hpWrap.classList.add('low');
-      else hpWrap.classList.remove('low');
-      coinsView.textContent = me.coins || 0;
-      killsView.textContent = me.kills || 0;
-    }
+    hpView.textContent = myHp;
+    if (myHp <= 30) hpWrap.classList.add('low');
+    else hpWrap.classList.remove('low');
+    coinsView.textContent = myCoins;
+    killsView.textContent = myKills;
   }
 
   createBtn.addEventListener('click', () => {
@@ -574,7 +596,6 @@
     if (socket) socket.emit('start_game', { code: roomCode });
   });
 
-  // === ЧАСТИЦЫ ===
   function spawnParticles(x, y, color, count = 8) {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -620,7 +641,6 @@
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
 
-    // дуло — размер зависит от уровня
     const lvl = p.gun_level || 0;
     const barrelLen = 22 + lvl * 5;
     const barrelW = 10 + lvl * 2;
@@ -629,20 +649,18 @@
     ctx.rotate(Math.atan2(p.dir.y, p.dir.x));
     ctx.fillStyle = darken(p.color, 50);
     ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
-    // кончик
     ctx.fillStyle = lvl >= 4 ? '#00e0ff' : '#222';
     ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
     if (lvl >= 3) {
-      // доп стволы по бокам
       ctx.fillStyle = darken(p.color, 40);
       ctx.fillRect(10, -barrelW / 2 - 6, barrelLen - 4, 4);
       ctx.fillRect(10, barrelW / 2 + 2, barrelLen - 4, 4);
     }
     ctx.restore();
 
-    // HP бар
     const hpW = 54, hpH = 7;
-    const ratio = Math.max(0, (p.hp || 100) / 100);
+    const curHp = isMe ? myHp : p.hp;
+    const ratio = Math.max(0, (curHp || 100) / 100);
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(p.x - hpW / 2 - 2, p.y - HALF - 22, hpW + 4, hpH + 4);
     ctx.fillStyle = '#111';
@@ -651,7 +669,6 @@
     ctx.fillStyle = hpColor;
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW * ratio, hpH);
 
-    // ник
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     ctx.strokeStyle = '#fff';
@@ -700,7 +717,6 @@
     }
   }
 
-  // === ФЕРМА — МЕЛЬНИЦА ===
   let wheelAngle = 0;
   function drawFarms() {
     wheelAngle += 0.05;
@@ -709,27 +725,22 @@
       const x = f.x, y = f.y;
       const hpRatio = Math.max(0, f.hp / 8);
 
-      // тень
       ctx.fillStyle = 'rgba(0,0,0,0.15)';
       ctx.fillRect(x - 24, y - 24, 52, 52);
 
-      // основание (башня мельницы)
       const grad = ctx.createLinearGradient(x - 22, y - 22, x + 22, y + 22);
       grad.addColorStop(0, '#d4a017');
       grad.addColorStop(1, '#8a6a10');
       ctx.fillStyle = grad;
       ctx.fillRect(x - 22, y - 22, 44, 44);
 
-      // обводка башни
       ctx.strokeStyle = hpRatio > 0.5 ? '#6a4a0a' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.lineWidth = 2.5;
       ctx.strokeRect(x - 22, y - 22, 44, 44);
 
-      // окно
       ctx.fillStyle = '#4a3005';
       ctx.fillRect(x - 5, y + 2, 10, 14);
 
-      // крыша (треугольник сверху)
       ctx.fillStyle = '#8b0000';
       ctx.beginPath();
       ctx.moveTo(x - 26, y - 22);
@@ -741,7 +752,6 @@
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // КРЫЛЬЯ МЕЛЬНИЦЫ (вращающиеся)
       ctx.save();
       ctx.translate(x, y - 30);
       ctx.rotate(wheelAngle);
@@ -756,7 +766,6 @@
       ctx.fill();
       ctx.restore();
 
-      // HP бар
       const hpW = 40, hpH = 5;
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(x - hpW/2 - 1, y - 46, hpW + 2, hpH + 2);
@@ -894,7 +903,7 @@
   function darken(color, percent) { return lighten(color, -percent); }
 
   function move(dir) {
-    if (moving || !me || me.hp <= 0 || !canAct() || !gameStarted) {
+    if (moving || !me || myHp <= 0 || !canAct() || !gameStarted) {
       if (!canAct()) haptic('light');
       return;
     }
@@ -935,7 +944,7 @@
   });
 
   $('shootBtn').addEventListener('click', () => {
-    if (!me || me.hp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
+    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('shot');
     lastAction = performance.now();
     updateCD();
@@ -944,7 +953,7 @@
   });
 
   $('wallBtn').addEventListener('click', () => {
-    if (!me || me.hp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
+    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('light');
     lastAction = performance.now();
     updateCD();
@@ -952,7 +961,7 @@
   });
 
   $('farmBtn').addEventListener('click', () => {
-    if (!me || me.hp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
+    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('light');
     lastAction = performance.now();
     updateCD();
@@ -960,7 +969,7 @@
   });
 
   $('gunBtn').addEventListener('click', () => {
-    if (!me || me.hp <= 0 || !gameStarted) return;
+    if (!me || myHp <= 0 || !gameStarted) return;
     haptic('light');
     socket.emit('upgrade_gun', {});
   });
@@ -992,7 +1001,6 @@
 
       let hitSomething = false;
 
-      // стены
       for (const wid in walls) {
         const w = walls[wid];
         if (Math.abs(w.x - b.x) < 25 && Math.abs(w.y - b.y) < 25) {
@@ -1002,7 +1010,6 @@
         }
       }
 
-      // фермы
       if (!hitSomething) {
         for (const fid in farms) {
           const f = farms[fid];
@@ -1014,7 +1021,6 @@
         }
       }
 
-      // игроки
       if (!hitSomething) {
         for (const sid in players) {
           if (sid === b.owner) continue;
