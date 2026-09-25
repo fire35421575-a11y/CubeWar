@@ -227,7 +227,7 @@ def on_start_game(data):
 
 
 def passive_loop(code):
-    """Каждую секунду проверяем доход, реген, очки ферм."""
+    """Каждую секунду: доход, реген, фермы. Отправляем в КОМНАТУ."""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -273,7 +273,7 @@ def passive_loop(code):
                     }, to=code)
                 farm["last_income"] = now
 
-        # Отправляем ВСЕМ в комнату — клиент сам выберет свои данные
+        # ВАЖНО: to=code, не to=sid — иначе падает в фоне
         emit('tick_update', {
             "players": {
                 s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]}
