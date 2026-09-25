@@ -147,28 +147,45 @@ def on_start_round(data):
 
 
 def round_loop(code):
+    """Цикл раундов: игра → пауза → игра."""
     while True:
-        socketio.sleep(ROUND_TIME)
+        # ИГРА
+        for _ in range(ROUND_TIME):
+            socketio.sleep(1)
+            if code not in GAMES:
+                return
+            if not GAMES[code].get("round_active"):
+                return
         if code not in GAMES:
             return
+
+        # КОНЕЦ РАУНДА
         g = GAMES[code]
-        if not g.get("round_active"):
-            return
         g["round_active"] = False
         emit('round_ended', {"pause": PAUSE_TIME}, to=code)
-        socketio.sleep(PAUSE_TIME)
+
+        # ПАУЗА
+        for _ in range(PAUSE_TIME):
+            socketio.sleep(1)
+            if code not in GAMES:
+                return
         if code not in GAMES:
             return
+
+        # ПРОВЕРКА НА ПОБЕДУ
         g = GAMES[code]
         alive = [p for p in g["players"].values() if p["hp"] > 0]
         if len(alive) <= 1:
             emit('game_over', {}, to=code)
             return
+
+        # НОВЫЙ РАУНД
         g["round_active"] = True
         g["round_num"] = g.get("round_num", 0) + 1
         for p in g["players"].values():
             if p["hp"] > 0:
                 p["actions_left"] = ACTIONS_PER_ROUND
+
         emit('round_started', {
             "round_time": ROUND_TIME,
             "actions_per_round": ACTIONS_PER_ROUND,
@@ -187,7 +204,6 @@ def on_move(data):
             if not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
-                # важно: сообщаем клиенту, что действий нет
                 emit('no_actions', {}, to=sid)
                 return
             nx = data.get("x", p["x"])
