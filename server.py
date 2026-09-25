@@ -28,6 +28,7 @@ KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
 START_COINS = 500
+EMOTION_COOLDOWN = 6
 
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
@@ -151,6 +152,7 @@ def on_join(data):
         "last_action": 0,
         "last_passive": time.time(),
         "last_regen": time.time(),
+        "last_emotion": 0,
         "ready": False,
     }
     join_room(code)
@@ -198,13 +200,14 @@ def on_start_game(data):
     if game.get("started"):
         return
     players = game["players"]
-    if len(players) < 2:
-        emit('error_msg', {"text": "Минимум 2 игрока"})
+    if len(players) < 1:
+        emit('error_msg', {"text": "Нужен хотя бы 1 игрок"})
         return
-    not_ready = [p["name"] for p in players.values() if not p.get("ready")]
-    if not_ready:
-        emit('error_msg', {"text": "Не все готовы: " + ", ".join(not_ready)})
-        return
+    if len(players) > 1:
+        not_ready = [p["name"] for p in players.values() if not p.get("ready")]
+        if not_ready:
+            emit('error_msg', {"text": "Не все готовы: " + ", ".join(not_ready)})
+            return
 
     game["started"] = True
     spawns = get_spawns(len(players))
@@ -216,6 +219,7 @@ def on_start_game(data):
         p["gun_level"] = 0
         p["last_passive"] = time.time()
         p["last_regen"] = time.time()
+        p["last_emotion"] = 0
 
     emit('game_started', {
         "players": players,
@@ -227,7 +231,7 @@ def on_start_game(data):
 
 
 def passive_loop(code):
-    """Каждую секунду: доход, реген, фермы. Отправляем в КОМНАТУ."""
+    """Каждую секунду: доход, реген, фермы. Только socketio.server.emit!"""
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -264,22 +268,49 @@ def passive_loop(code):
                 if owner_sid and owner_sid in g["players"]:
                     g["players"][owner_sid]["coins"] += FARM_INCOME
                     print(f"[FARM INCOME] farm {fid} -> {g['players'][owner_sid]['name']} +{FARM_INCOME}")
-                    emit('farm_income', {
+                    socketio.server.emit('farm_income', {
                         "id": fid,
                         "x": farm["x"],
                         "y": farm["y"],
                         "amount": FARM_INCOME,
                         "owner": owner_sid,
-                    }, to=code)
+                    }, room=code, namespace='/')
                 farm["last_income"] = now
 
-        # ВАЖНО: to=code, не to=sid — иначе падает в фоне
-        emit('tick_update', {
+        # ВАЖНО: socketio.server.emit, не socketio.emit
+        socketio.server.emit('tick_update', {
             "players": {
                 s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]}
                 for s, p in g["players"].items()
             }
-        }, to=code)
+        }, room=code, namespace='/')
+
+
+@socketio.on('emotion')
+def on_emotion(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("started"):
+                return
+            now = time.time()
+            last = p.get("last_emotion", 0)
+            if now - last < EMOTION_COOLDOWN:
+                left = EMOTION_COOLDOWN - (now - last)
+                emit('emotion_cooldown', {"left": left}, to=sid)
+                return
+            p["last_emotion"] = now
+            emoji = data.get("emoji", "😂")
+            if len(emoji) > 4:
+                emoji = emoji[:4]
+            emit('emotion_shown', {
+                "sid": sid,
+                "emoji": emoji,
+                "x": p["x"],
+                "y": p["y"],
+            }, to=code)
+            break
 
 
 @socketio.on('move')
@@ -474,7 +505,7 @@ def on_hit(data):
                     "killer": killer_sid,
                 }, to=code)
                 alive = [s for s, pl in game["players"].items() if pl["hp"] > 0]
-                if len(alive) <= 1:
+                if len(alive) <= 1 and len(game["players"]) > 1:
                     winner = game["players"].get(alive[0]) if alive else None
                     emit('game_over', {
                         "winner": winner["name"] if winner else "Ничья",
