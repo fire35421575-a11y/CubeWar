@@ -3,6 +3,7 @@ from flask_socketio import SocketIO, emit, join_room
 import os
 import random
 import string
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'cubewar_secret'
@@ -13,9 +14,7 @@ GAMES = {}
 COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6"]
 
 MAX_PLAYERS = 4
-ACTIONS_PER_ROUND = 10
-ROUND_TIME = 50
-PAUSE_TIME = 3
+COOLDOWN = 2.0  # секунды между действиями
 W, H = 800, 800
 WALL_HP = 4
 
@@ -39,6 +38,17 @@ def check_wall_collision(game, x, y):
                 y + half > wy - 25 and y - half < wy + 25):
             return True
     return False
+
+
+def can_act(p):
+    """Проверяет, прошло ли КД."""
+    now = time.time()
+    last = p.get("last_action", 0)
+    return (now - last) >= COOLDOWN
+
+
+def mark_action(p):
+    p["last_action"] = time.time()
 
 
 @app.route('/')
@@ -67,22 +77,19 @@ def on_create(data):
                 "x": px, "y": py,
                 "dir": {"x": 1, "y": 0},
                 "hp": 100,
-                "actions_left": ACTIONS_PER_ROUND,
                 "color": COLORS[0],
+                "last_action": 0,
             }
         },
         "walls": {},
         "wall_id": 0,
-        "round_active": False,
-        "round_num": 0,
     }
     join_room(code)
     emit('joined', {
         "code": code,
         "players": GAMES[code]["players"],
         "my_color": COLORS[0],
-        "actions_per_round": ACTIONS_PER_ROUND,
-        "round_time": ROUND_TIME,
+        "cooldown": COOLDOWN,
         "walls": {},
     })
 
@@ -106,91 +113,21 @@ def on_join(data):
         "x": px, "y": py,
         "dir": {"x": 1, "y": 0},
         "hp": 100,
-        "actions_left": ACTIONS_PER_ROUND,
         "color": COLORS[idx % len(COLORS)],
+        "last_action": 0,
     }
     join_room(code)
     emit('joined', {
         "code": code,
         "players": game["players"],
         "my_color": COLORS[idx % len(COLORS)],
-        "actions_per_round": ACTIONS_PER_ROUND,
-        "round_time": ROUND_TIME,
+        "cooldown": COOLDOWN,
         "walls": game["walls"],
     })
     emit('player_joined', {
         "sid": sid,
         "player": game["players"][sid],
     }, to=code, include_self=False)
-
-
-@socketio.on('start_round')
-def on_start_round(data):
-    code = data.get('code', '').upper()
-    if code not in GAMES:
-        return
-    game = GAMES[code]
-    if request.sid != game["host"]:
-        return
-    if game.get("round_active"):
-        return
-    game["round_active"] = True
-    game["round_num"] = game.get("round_num", 0) + 1
-    for p in game["players"].values():
-        p["actions_left"] = ACTIONS_PER_ROUND
-    emit('round_started', {
-        "round_time": ROUND_TIME,
-        "actions_per_round": ACTIONS_PER_ROUND,
-        "round_num": game["round_num"],
-    }, to=code)
-    socketio.start_background_task(round_loop, code)
-
-
-def round_loop(code):
-    """Цикл раундов: игра → пауза → игра."""
-    while True:
-        # ИГРА
-        for _ in range(ROUND_TIME):
-            socketio.sleep(1)
-            if code not in GAMES:
-                return
-            if not GAMES[code].get("round_active"):
-                return
-        if code not in GAMES:
-            return
-
-        # КОНЕЦ РАУНДА
-        g = GAMES[code]
-        g["round_active"] = False
-        emit('round_ended', {"pause": PAUSE_TIME}, to=code)
-
-        # ПАУЗА
-        for _ in range(PAUSE_TIME):
-            socketio.sleep(1)
-            if code not in GAMES:
-                return
-        if code not in GAMES:
-            return
-
-        # ПРОВЕРКА НА ПОБЕДУ
-        g = GAMES[code]
-        alive = [p for p in g["players"].values() if p["hp"] > 0]
-        if len(alive) <= 1:
-            emit('game_over', {}, to=code)
-            return
-
-        # НОВЫЙ РАУНД
-        g["round_active"] = True
-        g["round_num"] = g.get("round_num", 0) + 1
-        for p in g["players"].values():
-            if p["hp"] > 0:
-                p["actions_left"] = ACTIONS_PER_ROUND
-
-        emit('round_started', {
-            "round_time": ROUND_TIME,
-            "actions_per_round": ACTIONS_PER_ROUND,
-            "round_num": g["round_num"],
-        }, to=code)
 
 
 @socketio.on('move')
@@ -201,10 +138,8 @@ def on_move(data):
             p = game["players"][sid]
             if p["hp"] <= 0:
                 return
-            if not game.get("round_active"):
-                return
-            if p["actions_left"] <= 0:
-                emit('no_actions', {}, to=sid)
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
                 return
             nx = data.get("x", p["x"])
             ny = data.get("y", p["y"])
@@ -214,10 +149,11 @@ def on_move(data):
             p["x"] = nx
             p["y"] = ny
             p["dir"] = data.get("dir", p["dir"])
-            p["actions_left"] -= 1
+            mark_action(p)
             emit('player_moved', {
                 "sid": sid, "x": p["x"], "y": p["y"],
-                "dir": p["dir"], "actions_left": p["actions_left"],
+                "dir": p["dir"],
+                "last_action": p["last_action"],
             }, to=code)
             break
 
@@ -228,10 +164,10 @@ def on_place_wall(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("round_active"):
+            if p["hp"] <= 0:
                 return
-            if p["actions_left"] <= 0:
-                emit('no_actions', {}, to=sid)
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
                 return
             wx = p["x"] - p["dir"]["x"] * 50
             wy = p["y"] - p["dir"]["y"] * 50
@@ -251,10 +187,10 @@ def on_place_wall(data):
                 "hp": WALL_HP,
                 "owner": sid,
             }
-            p["actions_left"] -= 1
+            mark_action(p)
             emit('wall_placed', {
                 "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
-                "actions_left": p["actions_left"],
+                "last_action": p["last_action"],
             }, to=code)
             break
 
@@ -265,18 +201,18 @@ def on_shoot(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("round_active"):
+            if p["hp"] <= 0:
                 return
-            if p["actions_left"] <= 0:
-                emit('no_actions', {}, to=sid)
+            if not can_act(p):
+                emit('on_cooldown', {}, to=sid)
                 return
-            p["actions_left"] -= 1
+            mark_action(p)
             emit('bullet_fired', {
                 "sid": sid,
                 "x": p["x"], "y": p["y"],
                 "dir": p["dir"],
                 "color": p["color"],
-                "actions_left": p["actions_left"],
+                "last_action": p["last_action"],
             }, to=code)
             break
 
