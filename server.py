@@ -254,7 +254,7 @@ def passive_loop(code):
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
 
-        # Доход с ферм — ИСПРАВЛЕНО
+        # Доход с ферм
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
                 del g["farms"][fid]
@@ -273,18 +273,13 @@ def passive_loop(code):
                     }, to=code)
                 farm["last_income"] = now
 
-        # Персональный tick для каждого
-        for sid in g["players"]:
-            p = g["players"][sid]
-            emit('tick_update', {
-                "my_coins": p["coins"],
-                "my_hp": p["hp"],
-                "my_kills": p["kills"],
-                "others": {
-                    s: {"hp": g["players"][s]["hp"]}
-                    for s in g["players"] if s != sid
-                }
-            }, to=sid)
+        # Отправляем ВСЕМ в комнату — клиент сам выберет свои данные
+        emit('tick_update', {
+            "players": {
+                s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]}
+                for s, p in g["players"].items()
+            }
+        }, to=code)
 
 
 @socketio.on('move')
