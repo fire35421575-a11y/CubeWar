@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>CubeWar</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   body {
@@ -124,6 +125,26 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
+  // === TELEGRAM SDK ===
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try { tg.setHeaderColor('#1a1a24'); } catch(e) {}
+    try { tg.setBackgroundColor('#1a1a24'); } catch(e) {}
+    try { tg.enableClosingConfirmation(); } catch(e) {}
+  }
+
+  function haptic(type = 'light') {
+    try {
+      if (!tg || !tg.HapticFeedback) return;
+      if (type === 'shot') tg.HapticFeedback.impactOccurred('heavy');
+      else if (type === 'hit') tg.HapticFeedback.notificationOccurred('success');
+      else tg.HapticFeedback.impactOccurred('light');
+    } catch(e) {}
+  }
+
+  // === ИГРА ===
   const W = 800, H = 800;
   const CUBE = 50, HALF = CUBE / 2;
   const STEP = 50, ANIM = 6;
@@ -165,12 +186,18 @@
   const actionsView = document.getElementById('actionsView');
   const timerView = document.getElementById('timerView');
 
+  // автоподстановка имени из Telegram
+  if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+    const u = tg.initDataUnsafe.user;
+    const name = u.first_name || u.username || '';
+    if (name) nameInput.value = name.slice(0, 12);
+  }
+
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
   }
 
-  // === ПОДКЛЮЧЕНИЕ ===
   function connect() {
     socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
 
@@ -223,6 +250,7 @@
         p.hp = data.hp;
         spawnParticles(p.x, p.y, '#ff4444', 14);
         spawnFlash(p.x, p.y);
+        haptic('hit');
         render();
         updateHUD();
       }
@@ -256,7 +284,6 @@
       if (timerInterval) clearInterval(timerInterval);
       timeLeft = data.pause || 3;
       timerView.textContent = timeLeft;
-      // показать паузу
       render();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillRect(0, H/2 - 70, W, 140);
@@ -341,7 +368,6 @@
     if (socket) socket.emit('start_round', { code: roomCode });
   });
 
-  // === ЧАСТИЦЫ ===
   function spawnParticles(x, y, color, count = 8) {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -350,9 +376,7 @@
         x, y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        life: 1,
-        color,
-        size: 3 + Math.random() * 3,
+        life: 1, color, size: 3 + Math.random() * 3,
       });
     }
   }
@@ -361,7 +385,6 @@
     hitFlashes.push({ x, y, life: 1, radius: 10 });
   }
 
-  // === ОТРИСОВКА ===
   function drawGrid() {
     ctx.fillStyle = '#f8f8fa';
     ctx.fillRect(0, 0, W, H);
@@ -389,46 +412,32 @@
   function drawCube(p, isMe) {
     if (p.alive === false) return;
     const x = p.x - HALF, y = p.y - HALF;
-
-    // тень
     ctx.fillStyle = 'rgba(0,0,0,0.15)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
-
-    // тело с градиентом
     const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
     grad.addColorStop(0, p.color);
     grad.addColorStop(1, shadeColor(p.color, -40));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, CUBE, CUBE);
-
-    // обводка
     ctx.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
-
-    // глаза
     ctx.fillStyle = '#fff';
     ctx.beginPath();
     ctx.arc(p.x - 8, p.y - 6, 5, 0, Math.PI * 2);
     ctx.arc(p.x + 8, p.y - 6, 5, 0, Math.PI * 2);
     ctx.fill();
-
-    // зрачки
     const px = p.dir.x * 2, py = p.dir.y * 2;
     ctx.fillStyle = '#000';
     ctx.beginPath();
     ctx.arc(p.x - 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
     ctx.arc(p.x + 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
     ctx.fill();
-
-    // рот
     ctx.beginPath();
     ctx.arc(p.x, p.y + 10, 6, 0.2 * Math.PI, 0.8 * Math.PI);
     ctx.strokeStyle = 'rgba(0,0,0,0.5)';
     ctx.lineWidth = 2;
     ctx.stroke();
-
-    // линия взгляда
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     ctx.lineTo(p.x + p.dir.x * (HALF + 25), p.y + p.dir.y * (HALF + 25));
@@ -437,8 +446,6 @@
     ctx.globalAlpha = 0.6;
     ctx.stroke();
     ctx.globalAlpha = 1;
-
-    // HP bar
     const hpW = 50, hpH = 6;
     const ratio = Math.max(0, (p.hp || 100) / 100);
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
@@ -447,8 +454,6 @@
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW, hpH);
     ctx.fillStyle = ratio > 0.6 ? '#27ae60' : (ratio > 0.3 ? '#f39c12' : '#c0392b');
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW * ratio, hpH);
-
-    // ник с обводкой
     ctx.font = 'bold 13px Arial';
     ctx.textAlign = 'center';
     ctx.strokeStyle = '#fff';
@@ -460,7 +465,6 @@
 
   function drawBullets() {
     bullets.forEach(b => {
-      // хвост
       const tailX = b.x - b.dx * 18;
       const tailY = b.y - b.dy * 18;
       ctx.beginPath();
@@ -471,16 +475,12 @@
       ctx.globalAlpha = 0.5;
       ctx.stroke();
       ctx.globalAlpha = 1;
-
-      // свечение
       ctx.beginPath();
       ctx.arc(b.x, b.y, 12, 0, Math.PI * 2);
       ctx.fillStyle = b.color;
       ctx.globalAlpha = 0.25;
       ctx.fill();
       ctx.globalAlpha = 1;
-
-      // тело
       ctx.beginPath();
       ctx.arc(b.x, b.y, 7, 0, Math.PI * 2);
       ctx.fillStyle = b.color;
@@ -494,10 +494,8 @@
   function drawParticles() {
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= 0.95;
-      p.vy *= 0.95;
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.95; p.vy *= 0.95;
       p.life -= 0.03;
       if (p.life <= 0) { particles.splice(i, 1); continue; }
       ctx.beginPath();
@@ -512,8 +510,7 @@
   function drawFlashes() {
     for (let i = hitFlashes.length - 1; i >= 0; i--) {
       const f = hitFlashes[i];
-      f.life -= 0.06;
-      f.radius += 5;
+      f.life -= 0.06; f.radius += 5;
       if (f.life <= 0) { hitFlashes.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
@@ -537,9 +534,9 @@
     drawFlashes();
   }
 
-  // === ДВИЖЕНИЕ ===
   function move(dir) {
     if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
+    haptic('light');
     moving = true;
     const dirs = {
       up:    { x: 0, y: -1 }, down:  { x: 0, y: 1 },
@@ -577,8 +574,8 @@
 
   document.getElementById('shootBtn').addEventListener('click', () => {
     if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
+    haptic('shot');
     socket.emit('shoot', {});
-    // локальная вспышка
     spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
   });
 
@@ -590,26 +587,20 @@
     else if (e.key === ' ') { e.preventDefault(); document.getElementById('shootBtn').click(); }
   });
 
-  // === ПУЛИ ===
   function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.dx * BULLET_STEP;
       b.y += b.dy * BULLET_STEP;
       b.steps++;
-
-      // искры от пули
       if (b.steps % 2 === 0) {
         particles.push({
           x: b.x, y: b.y,
           vx: (Math.random() - 0.5) * 2,
           vy: (Math.random() - 0.5) * 2,
-          life: 0.6,
-          color: b.color,
-          size: 3,
+          life: 0.6, color: b.color, size: 3,
         });
       }
-
       let hit = false;
       for (const sid in players) {
         if (sid === b.owner) continue;
