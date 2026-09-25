@@ -10,14 +10,14 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 GAMES = {}
 
-COLORS = ["#c0392b", "#2980b9", "#27ae60", "#8e44ad",
-          "#d35400", "#16a085", "#f39c12", "#e91e63"]
+COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6"]
 
 MAX_PLAYERS = 4
 ACTIONS_PER_ROUND = 10
 ROUND_TIME = 50
 PAUSE_TIME = 3
 W, H = 800, 800
+WALL_HP = 4
 
 
 def generate_code():
@@ -25,13 +25,22 @@ def generate_code():
 
 
 def get_spawn(idx):
-    positions = [
-        (100, 100),
-        (W - 100, 100),
-        (100, H - 100),
-        (W - 100, H - 100),
-    ]
+    positions = [(80, 80), (W - 80, 80), (80, H - 80), (W - 80, H - 80)]
     return positions[idx % len(positions)]
+
+
+def check_wall_collision(game, x, y, ignore_id=None):
+    half = 25
+    for wid, w in game["walls"].items():
+        if w["hp"] <= 0:
+            continue
+        if wid == ignore_id:
+            continue
+        wx, wy = w["x"], w["y"]
+        if (x + half > wx - 25 and x - half < wx + 25 and
+                y + half > wy - 25 and y - half < wy + 25):
+            return True
+    return False
 
 
 @app.route('/')
@@ -64,6 +73,8 @@ def on_create(data):
                 "color": COLORS[0],
             }
         },
+        "walls": {},
+        "wall_id": 0,
         "round_active": False,
         "round_num": 0,
     }
@@ -74,6 +85,7 @@ def on_create(data):
         "my_color": COLORS[0],
         "actions_per_round": ACTIONS_PER_ROUND,
         "round_time": ROUND_TIME,
+        "walls": {},
     })
 
 
@@ -106,6 +118,7 @@ def on_join(data):
         "my_color": COLORS[idx % len(COLORS)],
         "actions_per_round": ACTIONS_PER_ROUND,
         "round_time": ROUND_TIME,
+        "walls": game["walls"],
     })
     emit('player_joined', {
         "sid": sid,
@@ -120,7 +133,7 @@ def on_start_round(data):
         return
     game = GAMES[code]
     if request.sid != game["host"]:
-        emit('error_msg', {"text": "Только хост может начать"})
+        emit('error_msg', {"text": "Только хост"})
         return
     if game.get("round_active"):
         return
@@ -137,7 +150,6 @@ def on_start_round(data):
 
 
 def round_loop(code):
-    """Цикл раундов: ROUND_TIME игры → PAUSE_TIME пауза → снова."""
     while True:
         socketio.sleep(ROUND_TIME)
         if code not in GAMES:
@@ -153,6 +165,7 @@ def round_loop(code):
         g = GAMES[code]
         alive = [p for p in g["players"].values() if p["hp"] > 0]
         if len(alive) <= 1:
+            emit('game_over', {}, to=code)
             return
         g["round_active"] = True
         g["round_num"] = g.get("round_num", 0) + 1
@@ -172,20 +185,62 @@ def on_move(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
-            if p["hp"] <= 0:
-                return
-            if not game.get("round_active"):
+            if p["hp"] <= 0 or not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
-                emit('error_msg', {"text": "Нет действий"})
                 return
-            p["x"] = data.get("x", p["x"])
-            p["y"] = data.get("y", p["y"])
+            nx = data.get("x", p["x"])
+            ny = data.get("y", p["y"])
+            if check_wall_collision(game, nx, ny):
+                emit('error_msg', {"text": "Стена!"})
+                return
+            p["x"] = nx
+            p["y"] = ny
             p["dir"] = data.get("dir", p["dir"])
             p["actions_left"] -= 1
             emit('player_moved', {
                 "sid": sid, "x": p["x"], "y": p["y"],
                 "dir": p["dir"], "actions_left": p["actions_left"],
+            }, to=code)
+            break
+
+
+@socketio.on('place_wall')
+def on_place_wall(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("round_active"):
+                return
+            if p["actions_left"] <= 0:
+                return
+            wx = p["x"] - p["dir"]["x"] * 50
+            wy = p["y"] - p["dir"]["y"] * 50
+            wx = max(25, min(W - 25, wx))
+            wy = max(25, min(H - 25, wy))
+            # не на игрока
+            for other in game["players"].values():
+                if other["hp"] <= 0:
+                    continue
+                if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
+                    emit('error_msg', {"text": "Тут игрок"})
+                    return
+            # не на стену
+            if check_wall_collision(game, wx, wy):
+                return
+
+            game["wall_id"] = game.get("wall_id", 0) + 1
+            wid = str(game["wall_id"])
+            game["walls"][wid] = {
+                "x": wx, "y": wy,
+                "hp": WALL_HP,
+                "owner": sid,
+            }
+            p["actions_left"] -= 1
+            emit('wall_placed', {
+                "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
+                "actions_left": p["actions_left"],
             }, to=code)
             break
 
@@ -196,12 +251,9 @@ def on_shoot(data):
     for code, game in GAMES.items():
         if sid in game["players"]:
             p = game["players"][sid]
-            if p["hp"] <= 0:
-                return
-            if not game.get("round_active"):
+            if p["hp"] <= 0 or not game.get("round_active"):
                 return
             if p["actions_left"] <= 0:
-                emit('error_msg', {"text": "Нет действий"})
                 return
             p["actions_left"] -= 1
             emit('bullet_fired', {
@@ -224,12 +276,27 @@ def on_hit(data):
             if p["hp"] <= 0:
                 break
             p["hp"] = max(0, p["hp"] - dmg)
-            emit('player_hit', {
-                "sid": target_sid,
-                "hp": p["hp"],
-            }, to=code)
+            emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
             if p["hp"] <= 0:
                 emit('player_died', {"sid": target_sid}, to=code)
+            break
+
+
+@socketio.on('hit_wall')
+def on_hit_wall(data):
+    wid = data.get("wall_id")
+    for code, game in GAMES.items():
+        if wid in game["walls"]:
+            w = game["walls"][wid]
+            w["hp"] -= 1
+            emit('wall_hit', {
+                "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
+            }, to=code)
+            if w["hp"] <= 0:
+                del game["walls"][wid]
+                emit('wall_destroyed', {
+                    "id": wid, "x": w["x"], "y": w["y"],
+                }, to=code)
             break
 
 
