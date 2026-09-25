@@ -83,7 +83,6 @@
   .btn-gun   { grid-column: 5; grid-row: 2; background: #8a5a4a; font-size: 18px; }
   .btn-gun:active { background: #9a6a5a; }
 
-  /* круговая перезарядка на кнопках */
   .btn .cd-ring {
     position: absolute;
     inset: 0;
@@ -131,6 +130,13 @@
   .hud .cd.ready { color: #2ecc71; }
   .hud .shield-indicator { color: #00e0ff; }
   .hud .big-indicator { color: #ff8800; }
+  .hud .timer-indicator { color: #9bb8ff; min-width: 50px; text-align: center; }
+  .hud .timer-indicator.warn { color: #f39c12; }
+  .hud .timer-indicator.danger { color: #e74c3c; animation: pulseDanger 0.8s infinite; }
+  @keyframes pulseDanger {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
 
   #winBanner {
     position: fixed; top: 50%; left: 50%;
@@ -243,42 +249,67 @@
   }
   #emotionCooldownText.show { display: block; }
 
-  /* Бонусы у игрока */
-  #bonusIndicators {
+  /* === АНИМАЦИЯ МЕНЮ === */
+  @keyframes titleSlam {
+    0% { transform: scale(6) rotate(-15deg); opacity: 0; filter: blur(20px); }
+    50% { transform: scale(0.9) rotate(2deg); opacity: 1; filter: blur(0); }
+    70% { transform: scale(1.15) rotate(-2deg); }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-8px); }
+    40% { transform: translateX(8px); }
+    60% { transform: translateX(-5px); }
+    80% { transform: translateX(5px); }
+  }
+
+  #menuScreen h1 {
+    animation: titleSlam 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  #menuScreen .hint { animation: fadeInUp 0.5s 0.6s both; }
+  #menuScreen #nameInput { animation: fadeInUp 0.5s 0.75s both; }
+  #menuScreen #createBtn { animation: fadeInUp 0.5s 0.9s both; }
+  #menuScreen #codeInput { animation: fadeInUp 0.5s 1.05s both; }
+  #menuScreen #joinBtn { animation: fadeInUp 0.5s 1.2s both; }
+  #menuScreen #menuStatus { animation: fadeInUp 0.5s 1.35s both; }
+  #menuScreen.shake-screen {
+    animation: shake 0.4s ease-in-out;
+  }
+
+  /* === ВЗРЫВ НА ФОНЕ === */
+  #bgFx {
     position: fixed;
-    top: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 8px;
-    z-index: 400;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    overflow: hidden;
+  }
+  .bg-spark {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #ffcc44;
+    box-shadow: 0 0 12px #ff8800, 0 0 24px #ff4400;
     pointer-events: none;
   }
-  .bonus-badge {
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 800;
-    color: #fff;
-    background: rgba(0,0,0,0.7);
-    border: 1px solid #fff;
-    text-shadow: 0 1px 2px #000;
-  }
-  .bonus-badge.shield {
-    background: rgba(0,180,255,0.85);
-    box-shadow: 0 0 16px rgba(0,180,255,0.8);
-  }
-  .bonus-badge.big {
-    background: rgba(255,140,0,0.85);
-    box-shadow: 0 0 16px rgba(255,140,0,0.8);
+  @keyframes sparkFly {
+    from { transform: translate(0,0) scale(1); opacity: 1; }
+    to { transform: translate(var(--dx), var(--dy)) scale(0); opacity: 0; }
   }
 </style>
 </head>
 <body>
 
+<div id="bgFx"></div>
 <div id="winBanner"></div>
 
-<h1>CUBE WAR</h1>
+<h1 id="mainTitle">CUBE WAR</h1>
 
 <div class="screen active" id="menuScreen">
   <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
@@ -308,6 +339,7 @@
     <span class="cd ready" id="cdView">КД: 0.0</span>
     <span class="shield-indicator" id="shieldInd" style="display:none;">🛡 <span id="shieldTime">0</span></span>
     <span class="big-indicator" id="bigInd" style="display:none;">🔵 <span id="bigTime">0</span></span>
+    <span class="timer-indicator" id="timerInd">⏱ 0:00</span>
   </div>
   <canvas id="canvas" width="800" height="800"></canvas>
   <div class="controls">
@@ -335,7 +367,6 @@
 </div>
 <div id="emotionCooldownBar"></div>
 <div id="emotionCooldownText"></div>
-<div id="bonusIndicators"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
@@ -354,17 +385,18 @@
       else if (type === 'hit') tg.HapticFeedback.notificationOccurred('success');
       else if (type === 'emotion') tg.HapticFeedback.notificationOccurred('success');
       else if (type === 'bonus') tg.HapticFeedback.notificationOccurred('success');
+      else if (type === 'explosion') tg.HapticFeedback.impactOccurred('heavy');
       else tg.HapticFeedback.impactOccurred('light');
     } catch(e) {}
   }
 
   // ==== КОНСТАНТЫ ====
-  const W = 800, H = 800;
+  let W = 1400, H = 1400;
+  const VIEW_W = 800, VIEW_H = 800;
   const CUBE = 50, HALF = CUBE / 2;
   const STEP = 50, ANIM = 6;
   const BULLET_STEP = 30;
-  const BULLET_LIFE = 1.5;           // <-- пуля живёт 1.5 сек
-  const BULLET_MAX_STEPS = Math.ceil(BULLET_LIFE * 1000 / 30) + 5;
+  const BULLET_LIFE = 0.6;
   const WALL_SIZE = 50;
   const EMOTION_CD = 6;
   const EMOTION_LIFE = 3;
@@ -400,6 +432,10 @@
   let gameStarted = false;
   let myShieldUntil = 0;
   let myBigBulletsUntil = 0;
+  let zone = { active: false, left: 0, top: 0, right: 0, bottom: 0, warn: false };
+  let gameElapsed = 0;
+  let cameraX = 0, cameraY = 0;
+  let zoneFlashTime = 0;
 
   const $ = id => document.getElementById(id);
   const menuScreen = $('menuScreen'), lobbyScreen = $('lobbyScreen'), gameScreen = $('gameScreen');
@@ -418,13 +454,47 @@
   const emotionCooldownText = $('emotionCooldownText');
   const shieldInd = $('shieldInd'), shieldTime = $('shieldTime');
   const bigInd = $('bigInd'), bigTime = $('bigTime');
-  const bonusIndicators = $('bonusIndicators');
+  const timerInd = $('timerInd');
+  const bgFx = $('bgFx');
 
   if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
     const u = tg.initDataUnsafe.user;
     const name = u.first_name || u.username || '';
     if (name) nameInput.value = name.slice(0, 12);
   }
+
+  // ==== ВЗРЫВ НА ФОНЕ (при открытии) ====
+  function createBgExplosion() {
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const count = 90;
+    for (let i = 0; i < count; i++) {
+      const spark = document.createElement('div');
+      spark.className = 'bg-spark';
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 200 + Math.random() * 500;
+      const dx = Math.cos(angle) * dist;
+      const dy = Math.sin(angle) * dist;
+      spark.style.left = cx + 'px';
+      spark.style.top = cy + 'px';
+      spark.style.setProperty('--dx', dx + 'px');
+      spark.style.setProperty('--dy', dy + 'px');
+      const dur = 0.8 + Math.random() * 1.2;
+      spark.style.animation = `sparkFly ${dur}s cubic-bezier(0.15, 0.6, 0.4, 1) forwards`;
+      spark.style.animationDelay = (Math.random() * 0.3) + 's';
+      // цвет
+      const colors = ['#ffcc44', '#ff8800', '#ff4400', '#fff', '#ff2200'];
+      spark.style.background = colors[Math.floor(Math.random() * colors.length)];
+      bgFx.appendChild(spark);
+      setTimeout(() => spark.remove(), 2500);
+    }
+    // "удар" по экрану
+    document.body.style.animation = 'shake 0.4s ease-in-out';
+    setTimeout(() => { document.body.style.animation = ''; }, 400);
+    haptic('explosion');
+  }
+  // запускаем через 0.3 сек после загрузки
+  setTimeout(createBgExplosion, 300);
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -433,13 +503,21 @@
     if (id !== 'gameScreen') {
       emotionPanel.classList.remove('show');
     }
+    if (id === 'menuScreen') {
+      // перезапуск анимации меню
+      const h = menuScreen.querySelector('h1');
+      if (h) {
+        h.style.animation = 'none';
+        void h.offsetWidth;
+        h.style.animation = '';
+      }
+    }
   }
 
   function canAct() {
     return (performance.now() - lastAction) / 1000 >= COOLDOWN;
   }
 
-  // ==== КРУГОВАЯ ПЕРЕЗАРЯДКА НА КНОПКАХ ====
   function updateCD() {
     const elapsed = (performance.now() - lastAction) / 1000;
     const left = Math.max(0, COOLDOWN - elapsed);
@@ -472,7 +550,6 @@
   }
   setInterval(updateCD, 50);
 
-  // ==== ТАЙМЕРЫ БОНУСОВ ====
   function updateBonusTimers() {
     const now = Date.now() / 1000;
     const shieldLeft = Math.max(0, myShieldUntil - now);
@@ -483,6 +560,19 @@
     bigTime.textContent = bigLeft.toFixed(1);
   }
   setInterval(updateBonusTimers, 100);
+
+  function updateTimer() {
+    const m = Math.floor(gameElapsed / 60);
+    const s = Math.floor(gameElapsed % 60);
+    timerInd.textContent = `⏱ ${m}:${s.toString().padStart(2,'0')}`;
+    timerInd.classList.remove('warn', 'danger');
+    if (gameElapsed >= 60 && !zone.active) {
+      timerInd.classList.add('warn');
+    } else if (zone.active) {
+      timerInd.classList.add('danger');
+    }
+  }
+  setInterval(updateTimer, 200);
 
   function updateEmotionCooldown() {
     const now = Date.now();
@@ -523,6 +613,8 @@
       FARM_COST = data.farm_cost || 20;
       WALL_COST = data.wall_cost || 10;
       COOLDOWN = data.cooldown || 0.5;
+      if (data.world_w) W = data.world_w;
+      if (data.world_h) H = data.world_h;
       me = players[mySid];
       if (me) {
         myCoins = me.coins;
@@ -558,6 +650,8 @@
       walls = data.walls || {};
       farms = data.farms || {};
       crates = data.crates || {};
+      if (data.world_w) W = data.world_w;
+      if (data.world_h) H = data.world_h;
       me = players[mySid];
       if (me) {
         myCoins = me.coins;
@@ -569,6 +663,8 @@
       gameStarted = true;
       updateHUD();
       showScreen('gameScreen');
+      // камера сразу к игроку
+      if (me) { cameraX = me.x - VIEW_W/2; cameraY = me.y - VIEW_H/2; }
       render();
     });
 
@@ -600,13 +696,32 @@
         updateHUD();
       }
       if (data.crates) {
-        // обновляем существующие
         for (const cid in data.crates) {
           if (crates[cid]) {
             crates[cid].hp = data.crates[cid].hp;
           }
         }
       }
+      if (data.zone) {
+        zone = data.zone;
+      }
+      if (typeof data.elapsed === 'number') {
+        gameElapsed = data.elapsed;
+      }
+    });
+
+    socket.on('zone_warning', () => {
+      // мигаем красным
+      zoneFlashTime = 1.0;
+      haptic('explosion');
+    });
+
+    socket.on('zone_update', (data) => {
+      zone.left = data.left;
+      zone.top = data.top;
+      zone.right = data.right;
+      zone.bottom = data.bottom;
+      zone.active = true;
     });
 
     socket.on('player_moved', (data) => {
@@ -638,7 +753,6 @@
           hit_targets: [],
         });
       }
-      // анимация выстрела — вспышка у ствола
       spawnMuzzleFlash(
         data.x + data.dir.x * 30,
         data.y + data.dir.y * 30,
@@ -658,7 +772,7 @@
       }
       const p = players[data.sid];
       if (p) {
-        spawnParticles(p.x, p.y, '#ff4040', 12);
+        spawnParticles(p.x, p.y, data.zone ? '#ff2020' : '#ff4040', 12);
         spawnFlash(p.x, p.y);
       }
       haptic('hit');
@@ -669,7 +783,6 @@
     socket.on('player_shielded', (data) => {
       const p = players[data.sid];
       if (p) {
-        // эффект "отскока"
         for (let i = 0; i < 12; i++) {
           const angle = Math.random() * Math.PI * 2;
           const speed = 3 + Math.random() * 3;
@@ -687,7 +800,7 @@
       const p = players[data.sid];
       if (p) {
         p.hp = 0; p.alive = false;
-        spawnParticles(p.x, p.y, p.color, 30);
+        spawnParticles(p.x, p.y, data.zone ? '#ff2020' : p.color, 30);
         spawnFlash(p.x, p.y);
         render();
       }
@@ -780,15 +893,14 @@
       }
     });
 
-    // ==== ЯЩИКИ ====
     socket.on('crate_spawned', (data) => {
       crates[data.id] = {
         x: data.x, y: data.y,
         hp: data.hp, max_hp: data.max_hp || 3,
         bonus: data.bonus,
         spawnAnim: 1.0,
+        hitFlash: 0,
       };
-      // красивое появление
       for (let i = 0; i < 20; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed = 2 + Math.random() * 4;
@@ -812,7 +924,6 @@
 
     socket.on('crate_destroyed', (data) => {
       if (crates[data.id]) delete crates[data.id];
-      // взрыв ящика
       for (let i = 0; i < 30; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed = 3 + Math.random() * 6;
@@ -865,7 +976,6 @@
       updateHUD();
     });
 
-    // ==== ЭМОЦИИ ====
     socket.on('emotion_shown', (data) => {
       activeEmotions.push({
         x: data.x,
@@ -914,7 +1024,6 @@
     });
   }
 
-  // ==== ЛОББИ ====
   function updateLobby() {
     lobbyPlayers.innerHTML = '';
     const list = Object.values(players);
@@ -925,7 +1034,7 @@
       chip.innerHTML = `${p.name} <span class="check">${p.ready ? '✅' : '⏳'}</span>`;
       lobbyPlayers.appendChild(chip);
     });
-    lobbyStatus.textContent = `Игроков: ${list.length} / 4`;
+    lobbyStatus.textContent = `Игроков: ${list.length} / 8`;
 
     const allReady = list.length >= 1 && (list.length === 1 || list.every(p => p.ready));
     startBtn.disabled = !allReady;
@@ -953,7 +1062,6 @@
     killsView.textContent = myKills;
   }
 
-  // ==== КНОПКИ ====
   createBtn.addEventListener('click', () => {
     const name = nameInput.value.trim();
     if (!name) { menuStatus.textContent = 'Введи имя'; return; }
@@ -978,7 +1086,6 @@
     if (socket) socket.emit('start_game', { code: roomCode });
   });
 
-  // ==== ЭМОЦИИ ====
   emotionBtn.addEventListener('click', () => {
     emotionPanel.classList.toggle('show');
     haptic('light');
@@ -1010,7 +1117,6 @@
     emotionPanel.classList.remove('show');
   });
 
-  // ==== ЧАСТИЦЫ ====
   function spawnParticles(x, y, color, count = 8) {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
@@ -1026,7 +1132,6 @@
     hitFlashes.push({ x, y, life: 1, radius: 10 });
   }
 
-  // вспышка у ствола при выстреле
   function spawnMuzzleFlash(x, y, color, dir, big) {
     const count = big ? 12 : 7;
     const baseAngle = Math.atan2(dir.y, dir.x);
@@ -1041,30 +1146,87 @@
         size: big ? 4 + Math.random() * 3 : 2 + Math.random() * 3,
       });
     }
-    // яркая вспышка
     hitFlashes.push({ x, y, life: 0.5, radius: 6 });
   }
 
   // ==== РИСОВАНИЕ ====
   function drawGrid() {
+    // определяем видимую область
+    const startX = Math.max(0, Math.floor(cameraX / 50) * 50);
+    const startY = Math.max(0, Math.floor(cameraY / 50) * 50);
+    const endX = Math.min(W, cameraX + VIEW_W + 50);
+    const endY = Math.min(H, cameraY + VIEW_H + 50);
+
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
+
+    // фон зоны (вне safe zone) — красная
+    if (zone.active) {
+      const zLeft = zone.left;
+      const zTop = zone.top;
+      const zRight = W - zone.right;
+      const zBottom = H - zone.bottom;
+
+      // 4 прямоугольника вокруг safe zone
+      ctx.fillStyle = 'rgba(231,76,60,0.35)';
+      // верх
+      if (zTop > cameraY) ctx.fillRect(cameraX, cameraY, VIEW_W, Math.max(0, zTop - cameraY));
+      // низ
+      if (zBottom < cameraY + VIEW_H) ctx.fillRect(cameraX, zBottom, VIEW_W, Math.max(0, cameraY + VIEW_H - zBottom));
+      // лево
+      if (zLeft > cameraX) {
+        const top = Math.max(cameraY, zTop);
+        const bottom = Math.min(cameraY + VIEW_H, zBottom);
+        ctx.fillRect(cameraX, top, Math.max(0, zLeft - cameraX), Math.max(0, bottom - top));
+      }
+      // право
+      if (zRight < cameraX + VIEW_W) {
+        const top = Math.max(cameraY, zTop);
+        const bottom = Math.min(cameraY + VIEW_H, zBottom);
+        ctx.fillRect(zRight, top, Math.max(0, cameraX + VIEW_W - zRight), Math.max(0, bottom - top));
+      }
+
+      // красная обводка safe zone
+      ctx.strokeStyle = zone.warn ? 'rgba(255,100,100,0.9)' : 'rgba(231,76,60,0.9)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 6]);
+      ctx.strokeRect(zLeft, zTop, zRight - zLeft, zBottom - zTop);
+      ctx.setLineDash([]);
+    }
+
     ctx.strokeStyle = '#e8e8ec';
     ctx.lineWidth = 1;
-    for (let x = 0; x < W; x += 50) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    for (let x = startX; x <= endX; x += 50) {
+      ctx.beginPath();
+      ctx.moveTo(x, cameraY);
+      ctx.lineTo(x, cameraY + VIEW_H);
+      ctx.stroke();
     }
-    for (let y = 0; y < H; y += 50) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    for (let y = startY; y <= endY; y += 50) {
+      ctx.beginPath();
+      ctx.moveTo(cameraX, y);
+      ctx.lineTo(cameraX + VIEW_W, y);
+      ctx.stroke();
+    }
+
+    // мигающая рамка при zone_warning
+    if (zoneFlashTime > 0) {
+      ctx.fillStyle = `rgba(255,0,0,${zoneFlashTime * 0.5})`;
+      ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
+      zoneFlashTime -= 0.02;
     }
   }
 
   function drawCube(p, isMe) {
     if (p.alive === false) return;
-    const x = p.x - HALF, y = p.y - HALF;
     const now = Date.now() / 1000;
     const shielded = (p.shield_until || 0) > now;
 
+    // не рисуем если далеко за пределами экрана
+    if (p.x < cameraX - 100 || p.x > cameraX + VIEW_W + 100 ||
+        p.y < cameraY - 100 || p.y > cameraY + VIEW_H + 100) return;
+
+    const x = p.x - HALF, y = p.y - HALF;
     ctx.fillStyle = 'rgba(0,0,0,0.2)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
 
@@ -1078,7 +1240,6 @@
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
 
-    // ствол
     const lvl = p.gun_level || 0;
     const barrelLen = 22 + lvl * 5;
     const barrelW = 10 + lvl * 2;
@@ -1097,7 +1258,6 @@
     }
     ctx.restore();
 
-    // энергетический шар (щит)
     if (shielded) {
       const t = now * 4;
       const pulse = 1 + Math.sin(t) * 0.08;
@@ -1113,7 +1273,6 @@
       ctx.strokeStyle = '#00e0ff';
       ctx.lineWidth = 2.5;
       ctx.stroke();
-      // кольцо пульсации
       const ringR = (CUBE / 2 + 18) + ((t * 20) % 20);
       ctx.beginPath();
       ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
@@ -1122,7 +1281,6 @@
       ctx.stroke();
     }
 
-    // HP
     const hpW = 54, hpH = 7;
     const curHp = isMe ? myHp : p.hp;
     const ratio = Math.max(0, (curHp || 100) / 100);
@@ -1147,6 +1305,9 @@
     for (const wid in walls) {
       const w = walls[wid];
       const x = w.x - WALL_SIZE / 2, y = w.y - WALL_SIZE / 2;
+      if (x + WALL_SIZE < cameraX || x > cameraX + VIEW_W ||
+          y + WALL_SIZE < cameraY || y > cameraY + VIEW_H) continue;
+
       const hpRatio = Math.max(0, w.hp / 4);
 
       ctx.fillStyle = 'rgba(0,0,0,0.2)';
@@ -1178,6 +1339,8 @@
     for (const fid in farms) {
       const f = farms[fid];
       const x = f.x, y = f.y;
+      if (x < cameraX - 50 || x > cameraX + VIEW_W + 50 ||
+          y < cameraY - 50 || y > cameraY + VIEW_H + 50) continue;
       const hpRatio = Math.max(0, f.hp / 8);
 
       ctx.fillStyle = 'rgba(0,0,0,0.15)';
@@ -1231,16 +1394,16 @@
     }
   }
 
-  // ==== ЯЩИКИ ====
   function drawCrates() {
     const now = performance.now() / 1000;
     for (const cid in crates) {
       const c = crates[cid];
       if (c.hp <= 0) continue;
       const x = c.x, y = c.y;
+      if (x < cameraX - 60 || x > cameraX + VIEW_W + 60 ||
+          y < cameraY - 60 || y > cameraY + VIEW_H + 60) continue;
       const half = CRATE_SIZE / 2;
 
-      // анимация появления
       let scale = 1;
       if (c.spawnAnim > 0) {
         scale = 1 + Math.sin((1 - c.spawnAnim) * Math.PI) * 0.3;
@@ -1248,7 +1411,6 @@
         if (c.spawnAnim < 0) c.spawnAnim = 0;
       }
 
-      // анимация попадания
       let shakeX = 0, shakeY = 0;
       if (c.hitFlash > 0) {
         shakeX = (Math.random() - 0.5) * 6;
@@ -1261,23 +1423,19 @@
       ctx.translate(x + shakeX, y + shakeY);
       ctx.scale(scale, scale);
 
-      // тень
       ctx.fillStyle = 'rgba(0,0,0,0.2)';
       ctx.fillRect(-half + 4, -half + 4, CRATE_SIZE, CRATE_SIZE);
 
-      // корпус ящика (дерево)
       const grad = ctx.createLinearGradient(-half, -half, half, half);
       grad.addColorStop(0, '#c08040');
       grad.addColorStop(1, '#7a4a1a');
       ctx.fillStyle = grad;
       ctx.fillRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
 
-      // обводка
       ctx.strokeStyle = '#4a2a0a';
       ctx.lineWidth = 3;
       ctx.strokeRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
 
-      // крест (доски)
       ctx.strokeStyle = 'rgba(60,30,10,0.7)';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -1287,16 +1445,6 @@
       ctx.lineTo(-half + 5, half - 5);
       ctx.stroke();
 
-      // гвозди
-      ctx.fillStyle = '#3a1a05';
-      const nails = [[-half+6,-half+6],[half-6,-half+6],[-half+6,half-6],[half-6,half-6]];
-      nails.forEach(([nx, ny]) => {
-        ctx.beginPath();
-        ctx.arc(nx, ny, 2, 0, Math.PI*2);
-        ctx.fill();
-      });
-
-      // иконка бонуса (мерцает)
       const pulse = 0.7 + Math.sin(now * 4) * 0.3;
       ctx.globalAlpha = pulse;
       ctx.font = 'bold 22px Arial';
@@ -1316,7 +1464,6 @@
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
 
-      // HP ящика
       const hpW = 44, hpH = 5;
       const hpRatio = Math.max(0, c.hp / (c.max_hp || 3));
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -1330,7 +1477,6 @@
     }
   }
 
-  // ==== ПУЛИ (с новым поведением) ====
   function drawBullets() {
     bullets.forEach(b => {
       const tailX = b.x - b.dx * b.tailLen;
@@ -1346,7 +1492,6 @@
       ctx.lineCap = 'round';
       ctx.stroke();
 
-      // свечение
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.radius * 2.3, 0, Math.PI * 2);
       ctx.fillStyle = b.big ? 'rgba(255,140,0,0.3)' : b.color;
@@ -1354,7 +1499,6 @@
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // ядро
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
       ctx.fillStyle = b.big ? '#ffaa33' : (b.pierce ? '#00e0ff' : '#fff');
@@ -1467,6 +1611,24 @@
   }
 
   function render() {
+    // камера следует за игроком
+    if (me) {
+      const targetCamX = me.x - VIEW_W / 2;
+      const targetCamY = me.y - VIEW_H / 2;
+      cameraX += (targetCamX - cameraX) * 0.15;
+      cameraY += (targetCamY - cameraY) * 0.15;
+      cameraX = Math.max(0, Math.min(W - VIEW_W, cameraX));
+      cameraY = Math.max(0, Math.min(H - VIEW_H, cameraY));
+    }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // масштаб canvas = VIEW_W / canvas.width
+    const scaleX = canvas.width / VIEW_W;
+    const scaleY = canvas.height / VIEW_H;
+    ctx.setTransform(scaleX, 0, 0, scaleY, -cameraX * scaleX, -cameraY * scaleY);
+
     drawGrid();
     drawFarms();
     drawWalls();
@@ -1482,6 +1644,53 @@
     drawFlashes();
     drawFloatingTexts();
     drawEmotions();
+
+    // мини-карта справа сверху
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawMinimap();
+  }
+
+  function drawMinimap() {
+    const size = 110;
+    const pad = 10;
+    const mx = canvas.width - size - pad;
+    const my = pad;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(mx, my, size, size);
+    ctx.strokeStyle = '#5a7fd8';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mx, my, size, size);
+
+    const sx = size / W;
+    const sy = size / H;
+
+    // зона
+    if (zone.active) {
+      ctx.fillStyle = 'rgba(231,76,60,0.35)';
+      const zx = mx + zone.left * sx;
+      const zy = my + zone.top * sy;
+      const zw = (W - zone.left - zone.right) * sx;
+      const zh = (H - zone.top - zone.bottom) * sy;
+      ctx.fillRect(mx, my, size, zy - my);
+      ctx.fillRect(mx, zy + zh, size, my + size - zy - zh);
+      ctx.fillRect(mx, zy, zx - mx, zh);
+      ctx.fillRect(zx + zw, zy, mx + size - zx - zw, zh);
+      ctx.strokeStyle = '#e74c3c';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(zx, zy, zw, zh);
+    }
+
+    // игроки
+    for (const sid in players) {
+      const p = players[sid];
+      if (p.alive === false) continue;
+      const px = mx + p.x * sx;
+      const py = my + p.y * sy;
+      ctx.beginPath();
+      ctx.arc(px, py, sid === mySid ? 4 : 3, 0, Math.PI*2);
+      ctx.fillStyle = sid === mySid ? '#fff' : p.color;
+      ctx.fill();
+    }
   }
 
   function lighten(color, percent) {
@@ -1493,7 +1702,6 @@
   }
   function darken(color, percent) { return lighten(color, -percent); }
 
-  // ==== ДВИЖЕНИЕ ====
   function move(dir) {
     if (moving || !me || myHp <= 0 || !canAct() || !gameStarted) {
       if (!canAct()) haptic('light');
@@ -1576,15 +1784,13 @@
     else if (e.key === 'f' || e.key === 'F') { emotionBtn.click(); }
   });
 
-  // ==== ПУЛИ (обновление) ====
-  function updateBullets(dt) {
+  function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.dx * BULLET_STEP;
       b.y += b.dy * BULLET_STEP;
-      b.age += 0.03; // ~30fps
+      b.age += 0.03;
 
-      // хвост
       if (Math.random() < 0.7) {
         particles.push({
           x: b.x, y: b.y,
@@ -1597,7 +1803,6 @@
 
       let hitSomething = false;
 
-      // стены
       for (const wid in walls) {
         const w = walls[wid];
         if (Math.abs(w.x - b.x) < 25 && Math.abs(w.y - b.y) < 25) {
@@ -1608,7 +1813,6 @@
         }
       }
 
-      // фермы
       if (!hitSomething) {
         for (const fid in farms) {
           const f = farms[fid];
@@ -1621,7 +1825,6 @@
         }
       }
 
-      // ящики
       if (!hitSomething) {
         for (const cid in crates) {
           const c = crates[cid];
@@ -1635,7 +1838,6 @@
         }
       }
 
-      // игроки
       if (!hitSomething) {
         for (const sid in players) {
           if (sid === b.owner) continue;
@@ -1660,11 +1862,9 @@
         }
       }
 
-      // пуля живёт 1.5 сек или попала / ушла за карту
       if (hitSomething ||
           b.age >= BULLET_LIFE ||
           b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
-        // "разрушение" пули
         for (let k = 0; k < (b.big ? 12 : 6); k++) {
           const angle = Math.random() * Math.PI * 2;
           const speed = 1 + Math.random() * 3;
@@ -1683,11 +1883,11 @@
 
   function renderLoop() {
     render();
-    requestAnimationFrame(() => updateBullets(0.03));
+    requestAnimationFrame(updateBullets);
   }
 
   render();
-  updateBullets(0.03);
+  updateBullets();
 </script>
 </body>
 </html>
