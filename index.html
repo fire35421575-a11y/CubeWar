@@ -1,632 +1,324 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>CubeWar</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  body {
-    background: #1a1a24; color: #eee;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    min-height: 100vh; display: flex; flex-direction: column;
-    align-items: center; padding: 8px; overflow: hidden; touch-action: none;
-  }
-  h1 { font-size: 18px; font-weight: 600; letter-spacing: 4px;
-       color: #9bb8ff; text-transform: uppercase; margin: 6px 0; }
-  .screen { display: none; flex-direction: column; align-items: center;
-            width: 100%; max-width: 600px; }
-  .screen.active { display: flex; }
-  input {
-    background: #2a2a36; border: 1px solid #3a3a48; color: #fff;
-    padding: 12px 16px; border-radius: 12px; font-size: 16px;
-    width: 100%; margin: 6px 0; outline: none; font-family: inherit;
-    text-align: center;
-  }
-  input:focus { border-color: #9bb8ff; }
-  .big-btn {
-    background: #3a5fcd; border: none; color: #fff;
-    padding: 12px 20px; border-radius: 12px; font-size: 15px;
-    font-weight: 600; cursor: pointer; width: 100%; margin: 6px 0;
-    transition: 0.15s; font-family: inherit;
-  }
-  .big-btn:active { transform: scale(0.97); }
-  .big-btn.secondary { background: #2a2a36; color: #9bb8ff; }
-  .big-btn:disabled { background: #2a2a36; color: #555; cursor: default; }
-  .room-code {
-    background: #2a2a36; border: 2px dashed #9bb8ff; color: #9bb8ff;
-    padding: 14px; border-radius: 12px; font-size: 26px; font-weight: 700;
-    letter-spacing: 6px; margin: 10px 0; user-select: all; text-align: center;
-    width: 100%;
-  }
-  .hint { font-size: 13px; color: #6a6a78; text-align: center; margin: 6px 0; line-height: 1.5; }
-  canvas {
-    background: #fff; border-radius: 12px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
-    touch-action: none; width: 100%; max-width: 600px; height: auto;
-  }
-  .controls {
-    display: grid;
-    grid-template-columns: repeat(4, 62px);
-    grid-template-rows: repeat(2, 62px);
-    gap: 8px; margin-top: 10px;
-  }
-  .btn {
-    background: #2a2a36; border: 1px solid #3a3a48; border-radius: 12px;
-    color: #fff; font-size: 24px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    user-select: none; transition: 0.1s;
-  }
-  .btn:active { background: #3a3a48; transform: scale(0.94); }
-  .btn-up    { grid-column: 2; grid-row: 1; }
-  .btn-left  { grid-column: 1; grid-row: 2; }
-  .btn-down  { grid-column: 2; grid-row: 2; }
-  .btn-right { grid-column: 3; grid-row: 2; }
-  .btn-shoot { grid-column: 4; grid-row: 2; background: #8e2020; font-size: 20px; }
-  .btn-shoot:active { background: #b03030; }
+from flask import Flask, send_from_directory, request
+from flask_socketio import SocketIO, emit, join_room
+import os
+import random
+import string
 
-  .players-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0;
-                 justify-content: center; width: 100%; }
-  .player-chip { padding: 3px 10px; border-radius: 20px; font-size: 12px;
-                 font-weight: 600; color: #fff; }
-  .status { font-size: 13px; color: #6a6a78; margin: 4px 0; text-align: center; }
-  .hud {
-    display: flex; gap: 16px; margin: 6px 0; font-size: 15px;
-    font-weight: 600; align-items: center;
-  }
-  .hud .hp { color: #27ae60; }
-  .hud .actions { color: #9bb8ff; }
-  .hud .timer { color: #f39c12; }
-</style>
-</head>
-<body>
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'cubewar_secret'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
-<h1>CubeWar</h1>
+GAMES = {}
 
-<!-- МЕНЮ -->
-<div class="screen active" id="menuScreen">
-  <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
-  <input type="text" id="nameInput" placeholder="Твоё имя" maxlength="12">
-  <button class="big-btn" id="createBtn">Создать комнату</button>
-  <input type="text" id="codeInput" placeholder="Код комнаты" maxlength="6"
-         style="text-transform: uppercase;">
-  <button class="big-btn secondary" id="joinBtn">Присоединиться</button>
-  <div class="status" id="menuStatus"></div>
-</div>
+COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6"]
 
-<!-- ЛОББИ -->
-<div class="screen" id="lobbyScreen">
-  <div class="hint">Код комнаты:</div>
-  <div class="room-code" id="roomCode">------</div>
-  <div class="hint" id="lobbyHint">Скинь код друзьям. Когда все зашли — жми «Играть».</div>
-  <button class="big-btn" id="startBtn" disabled>Ждём игроков...</button>
-  <div class="players-bar" id="lobbyPlayers"></div>
-  <div class="status" id="lobbyStatus"></div>
-</div>
+MAX_PLAYERS = 4
+ACTIONS_PER_ROUND = 10
+ROUND_TIME = 50
+PAUSE_TIME = 3
+W, H = 800, 800
+WALL_HP = 4
 
-<!-- ИГРА -->
-<div class="screen" id="gameScreen">
-  <div class="hud">
-    <span class="hp">❤️ <span id="hpView">100</span></span>
-    <span class="actions">⚡ <span id="actionsView">10</span>/10</span>
-    <span class="timer">⏱ <span id="timerView">--</span></span>
-  </div>
-  <canvas id="canvas" width="800" height="800"></canvas>
-  <div class="players-bar" id="gamePlayers"></div>
-  <div class="controls">
-    <button class="btn btn-up" data-dir="up">↑</button>
-    <button class="btn btn-left" data-dir="left">←</button>
-    <button class="btn btn-down" data-dir="down">↓</button>
-    <button class="btn btn-right" data-dir="right">→</button>
-    <button class="btn btn-shoot" id="shootBtn">🔫</button>
-  </div>
-</div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-<script>
-  // === TELEGRAM SDK ===
-  const tg = window.Telegram?.WebApp;
-  if (tg) {
-    tg.ready();
-    tg.expand();
-    try { tg.setHeaderColor('#1a1a24'); } catch(e) {}
-    try { tg.setBackgroundColor('#1a1a24'); } catch(e) {}
-    try { tg.enableClosingConfirmation(); } catch(e) {}
-  }
+def generate_code():
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-  function haptic(type = 'light') {
-    try {
-      if (!tg || !tg.HapticFeedback) return;
-      if (type === 'shot') tg.HapticFeedback.impactOccurred('heavy');
-      else if (type === 'hit') tg.HapticFeedback.notificationOccurred('success');
-      else tg.HapticFeedback.impactOccurred('light');
-    } catch(e) {}
-  }
 
-  // === ИГРА ===
-  const W = 800, H = 800;
-  const CUBE = 50, HALF = CUBE / 2;
-  const STEP = 50, ANIM = 6;
-  const BULLET_STEP = 30, BULLET_MAX = 30, BULLET_DMG = 20;
+def get_spawn(idx):
+    positions = [(80, 80), (W - 80, 80), (80, H - 80), (W - 80, H - 80)]
+    return positions[idx % len(positions)]
 
-  let socket = null;
-  let mySid = null;
-  let myColor = "#1a1a1a";
-  let roomCode = "";
-  let players = {};
-  let me = null;
-  let actionsPerRound = 10;
-  let roundTime = 50;
-  let roundActive = false;
-  let timeLeft = 0;
-  let timerInterval = null;
-  let bullets = [];
-  let particles = [];
-  let hitFlashes = [];
-  let moving = false;
 
-  const menuScreen = document.getElementById('menuScreen');
-  const lobbyScreen = document.getElementById('lobbyScreen');
-  const gameScreen = document.getElementById('gameScreen');
-  const nameInput = document.getElementById('nameInput');
-  const codeInput = document.getElementById('codeInput');
-  const createBtn = document.getElementById('createBtn');
-  const joinBtn = document.getElementById('joinBtn');
-  const menuStatus = document.getElementById('menuStatus');
-  const roomCodeEl = document.getElementById('roomCode');
-  const lobbyPlayers = document.getElementById('lobbyPlayers');
-  const lobbyStatus = document.getElementById('lobbyStatus');
-  const lobbyHint = document.getElementById('lobbyHint');
-  const startBtn = document.getElementById('startBtn');
-  const gamePlayers = document.getElementById('gamePlayers');
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
-  const hpView = document.getElementById('hpView');
-  const actionsView = document.getElementById('actionsView');
-  const timerView = document.getElementById('timerView');
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
 
-  // автоподстановка имени из Telegram
-  if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-    const u = tg.initDataUnsafe.user;
-    const name = u.first_name || u.username || '';
-    if (name) nameInput.value = name.slice(0, 12);
-  }
 
-  function showScreen(id) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-  }
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('.', path)
 
-  function connect() {
-    socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
 
-    socket.on('connect', () => { mySid = socket.id; });
-
-    socket.on('joined', (data) => {
-      roomCode = data.code;
-      myColor = data.my_color;
-      players = data.players;
-      me = players[mySid];
-      actionsPerRound = data.actions_per_round || 10;
-      roundTime = data.round_time || 50;
-      roomCodeEl.textContent = roomCode;
-      showScreen('lobbyScreen');
-      updateLobby();
-      updateHUD();
-    });
-
-    socket.on('player_joined', (data) => {
-      players[data.sid] = data.player;
-      updateLobby();
-    });
-
-    socket.on('player_left', (data) => {
-      delete players[data.sid];
-      updateLobby();
-      render();
-    });
-
-    socket.on('player_moved', (data) => {
-      const p = players[data.sid];
-      if (p) {
-        p.x = data.x; p.y = data.y; p.dir = data.dir;
-        p.actions_left = data.actions_left;
-        render();
-      }
-    });
-
-    socket.on('bullet_fired', (data) => {
-      bullets.push({
-        x: data.x, y: data.y, dx: data.dir.x, dy: data.dir.y,
-        color: data.color, owner: data.sid, steps: 0,
-      });
-      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, 6);
-    });
-
-    socket.on('player_hit', (data) => {
-      const p = players[data.sid];
-      if (p) {
-        p.hp = data.hp;
-        spawnParticles(p.x, p.y, '#ff4444', 14);
-        spawnFlash(p.x, p.y);
-        haptic('hit');
-        render();
-        updateHUD();
-      }
-    });
-
-    socket.on('player_died', (data) => {
-      const p = players[data.sid];
-      if (p) {
-        p.hp = 0; p.alive = false;
-        spawnParticles(p.x, p.y, p.color, 25);
-        spawnFlash(p.x, p.y);
-        render();
-      }
-    });
-
-    socket.on('round_started', (data) => {
-      roundActive = true;
-      timeLeft = data.round_time;
-      actionsPerRound = data.actions_per_round;
-      Object.values(players).forEach(p => {
-        if (p.hp > 0) p.actions_left = actionsPerRound;
-      });
-      startTimer();
-      showScreen('gameScreen');
-      updateHUD();
-      render();
-    });
-
-    socket.on('round_ended', (data) => {
-      roundActive = false;
-      if (timerInterval) clearInterval(timerInterval);
-      timeLeft = data.pause || 3;
-      timerView.textContent = timeLeft;
-      render();
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(0, H/2 - 70, W, 140);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 42px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('КОНЕЦ РАУНДА', W/2, H/2 - 10);
-      ctx.font = 'bold 28px Arial';
-      ctx.fillStyle = '#9bb8ff';
-      ctx.fillText('Новый через ' + timeLeft + ' сек', W/2, H/2 + 40);
-    });
-
-    socket.on('error_msg', (data) => {
-      menuStatus.textContent = data.text;
-    });
-
-    socket.on('disconnect', () => {
-      menuStatus.textContent = 'Отключён';
-      showScreen('menuScreen');
-    });
-  }
-
-  function updateLobby() {
-    lobbyPlayers.innerHTML = '';
-    const list = Object.values(players);
-    list.forEach(p => {
-      const chip = document.createElement('div');
-      chip.className = 'player-chip';
-      chip.style.background = p.color;
-      chip.textContent = p.name;
-      lobbyPlayers.appendChild(chip);
-    });
-    lobbyStatus.textContent = `Игроков: ${list.length} / 4`;
-    if (list.length >= 2) {
-      startBtn.disabled = false;
-      startBtn.textContent = 'Играть';
-      lobbyHint.textContent = 'Все готовы? Жми «Играть»!';
-    } else {
-      startBtn.disabled = true;
-      startBtn.textContent = 'Ждём игроков...';
+@socketio.on('create_game')
+def on_create(data):
+    code = generate_code()
+    while code in GAMES:
+        code = generate_code()
+    sid = request.sid
+    name = data.get('name', 'Игрок')[:12]
+    px, py = get_spawn(0)
+    GAMES[code] = {
+        "host": sid,
+        "players": {
+            sid: {
+                "name": name,
+                "x": px, "y": py,
+                "dir": {"x": 1, "y": 0},
+                "hp": 100,
+                "actions_left": ACTIONS_PER_ROUND,
+                "color": COLORS[0],
+            }
+        },
+        "walls": {},
+        "wall_id": 0,
+        "round_active": False,
+        "round_num": 0,
     }
-  }
+    join_room(code)
+    emit('joined', {
+        "code": code,
+        "players": GAMES[code]["players"],
+        "my_color": COLORS[0],
+        "actions_per_round": ACTIONS_PER_ROUND,
+        "round_time": ROUND_TIME,
+        "walls": {},
+    })
 
-  function updateHUD() {
-    if (me) {
-      hpView.textContent = me.hp || 100;
-      actionsView.textContent = me.actions_left || 0;
+
+@socketio.on('join_game')
+def on_join(data):
+    code = data.get('code', '').upper()
+    sid = request.sid
+    name = data.get('name', 'Игрок')[:12]
+    if code not in GAMES:
+        emit('error_msg', {"text": "Комната не найдена"})
+        return
+    game = GAMES[code]
+    if len(game["players"]) >= MAX_PLAYERS:
+        emit('error_msg', {"text": "Комната полна"})
+        return
+    idx = len(game["players"])
+    px, py = get_spawn(idx)
+    game["players"][sid] = {
+        "name": name,
+        "x": px, "y": py,
+        "dir": {"x": 1, "y": 0},
+        "hp": 100,
+        "actions_left": ACTIONS_PER_ROUND,
+        "color": COLORS[idx % len(COLORS)],
     }
-  }
+    join_room(code)
+    emit('joined', {
+        "code": code,
+        "players": game["players"],
+        "my_color": COLORS[idx % len(COLORS)],
+        "actions_per_round": ACTIONS_PER_ROUND,
+        "round_time": ROUND_TIME,
+        "walls": game["walls"],
+    })
+    emit('player_joined', {
+        "sid": sid,
+        "player": game["players"][sid],
+    }, to=code, include_self=False)
 
-  function startTimer() {
-    if (timerInterval) clearInterval(timerInterval);
-    timerView.textContent = timeLeft;
-    timerInterval = setInterval(() => {
-      timeLeft--;
-      if (timeLeft <= 0) {
-        clearInterval(timerInterval);
-        timerView.textContent = '0';
-      } else {
-        timerView.textContent = timeLeft;
-      }
-    }, 1000);
-  }
 
-  createBtn.addEventListener('click', () => {
-    const name = nameInput.value.trim();
-    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
-    if (!socket) connect();
-    setTimeout(() => socket.emit('create_game', { name }), 300);
-  });
+@socketio.on('start_round')
+def on_start_round(data):
+    code = data.get('code', '').upper()
+    if code not in GAMES:
+        return
+    game = GAMES[code]
+    if request.sid != game["host"]:
+        emit('error_msg', {"text": "Только хост"})
+        return
+    if game.get("round_active"):
+        return
+    game["round_active"] = True
+    game["round_num"] = game.get("round_num", 0) + 1
+    for p in game["players"].values():
+        p["actions_left"] = ACTIONS_PER_ROUND
+    emit('round_started', {
+        "round_time": ROUND_TIME,
+        "actions_per_round": ACTIONS_PER_ROUND,
+        "round_num": game["round_num"],
+    }, to=code)
+    socketio.start_background_task(round_loop, code)
 
-  joinBtn.addEventListener('click', () => {
-    const name = nameInput.value.trim();
-    const code = codeInput.value.trim().toUpperCase();
-    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
-    if (!code) { menuStatus.textContent = 'Введи код'; return; }
-    if (!socket) connect();
-    setTimeout(() => socket.emit('join_game', { name, code }), 300);
-  });
 
-  startBtn.addEventListener('click', () => {
-    if (socket) socket.emit('start_round', { code: roomCode });
-  });
+def round_loop(code):
+    while True:
+        socketio.sleep(ROUND_TIME)
+        if code not in GAMES:
+            return
+        g = GAMES[code]
+        if not g.get("round_active"):
+            return
+        g["round_active"] = False
+        emit('round_ended', {"pause": PAUSE_TIME}, to=code)
+        socketio.sleep(PAUSE_TIME)
+        if code not in GAMES:
+            return
+        g = GAMES[code]
+        alive = [p for p in g["players"].values() if p["hp"] > 0]
+        if len(alive) <= 1:
+            emit('game_over', {}, to=code)
+            return
+        g["round_active"] = True
+        g["round_num"] = g.get("round_num", 0) + 1
+        for p in g["players"].values():
+            if p["hp"] > 0:
+                p["actions_left"] = ACTIONS_PER_ROUND
+        emit('round_started', {
+            "round_time": ROUND_TIME,
+            "actions_per_round": ACTIONS_PER_ROUND,
+            "round_num": g["round_num"],
+        }, to=code)
 
-  function spawnParticles(x, y, color, count = 8) {
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 2 + Math.random() * 4;
-      particles.push({
-        x, y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 1, color, size: 3 + Math.random() * 3,
-      });
-    }
-  }
 
-  function spawnFlash(x, y) {
-    hitFlashes.push({ x, y, life: 1, radius: 10 });
-  }
+def check_wall_collision(game, x, y):
+    """Проверяет, не врезается ли кубик в стену."""
+    half = 25
+    for wid, w in game["walls"].items():
+        if w["hp"] <= 0:
+            continue
+        # стена 50x50 (одна клетка)
+        wx, wy = w["x"], w["y"]
+        if (x + half > wx - 25 and x - half < wx + 25 and
+                y + half > wy - 25 and y - half < wy + 25):
+            return True
+    return False
 
-  function drawGrid() {
-    ctx.fillStyle = '#f8f8fa';
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = '#e8e8ec';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < W; x += 50) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    }
-    for (let y = 0; y < H; y += 50) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-  }
 
-  function shadeColor(color, percent) {
-    const num = parseInt(color.replace('#',''), 16);
-    let r = (num >> 16) + percent;
-    let g = ((num >> 8) & 0x00FF) + percent;
-    let b = (num & 0x0000FF) + percent;
-    r = Math.max(0, Math.min(255, r));
-    g = Math.max(0, Math.min(255, g));
-    b = Math.max(0, Math.min(255, b));
-    return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
-  }
+@socketio.on('move')
+def on_move(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("round_active"):
+                return
+            if p["actions_left"] <= 0:
+                return
+            nx = data.get("x", p["x"])
+            ny = data.get("y", p["y"])
+            if check_wall_collision(game, nx, ny):
+                emit('error_msg', {"text": "Стена!"})
+                return
+            p["x"] = nx
+            p["y"] = ny
+            p["dir"] = data.get("dir", p["dir"])
+            p["actions_left"] -= 1
+            emit('player_moved', {
+                "sid": sid, "x": p["x"], "y": p["y"],
+                "dir": p["dir"], "actions_left": p["actions_left"],
+            }, to=code)
+            break
 
-  function drawCube(p, isMe) {
-    if (p.alive === false) return;
-    const x = p.x - HALF, y = p.y - HALF;
-    ctx.fillStyle = 'rgba(0,0,0,0.15)';
-    ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
-    const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
-    grad.addColorStop(0, p.color);
-    grad.addColorStop(1, shadeColor(p.color, -40));
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, CUBE, CUBE);
-    ctx.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,0.6)';
-    ctx.lineWidth = isMe ? 3 : 2;
-    ctx.strokeRect(x, y, CUBE, CUBE);
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(p.x - 8, p.y - 6, 5, 0, Math.PI * 2);
-    ctx.arc(p.x + 8, p.y - 6, 5, 0, Math.PI * 2);
-    ctx.fill();
-    const px = p.dir.x * 2, py = p.dir.y * 2;
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.arc(p.x - 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
-    ctx.arc(p.x + 8 + px, p.y - 6 + py, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(p.x, p.y + 10, 6, 0.2 * Math.PI, 0.8 * Math.PI);
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x + p.dir.x * (HALF + 25), p.y + p.dir.y * (HALF + 25));
-    ctx.strokeStyle = p.color;
-    ctx.lineWidth = 3;
-    ctx.globalAlpha = 0.6;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    const hpW = 50, hpH = 6;
-    const ratio = Math.max(0, (p.hp || 100) / 100);
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.fillRect(p.x - hpW / 2 - 2, p.y - HALF - 18, hpW + 4, hpH + 4);
-    ctx.fillStyle = '#333';
-    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW, hpH);
-    ctx.fillStyle = ratio > 0.6 ? '#27ae60' : (ratio > 0.3 ? '#f39c12' : '#c0392b');
-    ctx.fillRect(p.x - hpW / 2, p.y - HALF - 16, hpW * ratio, hpH);
-    ctx.font = 'bold 13px Arial';
-    ctx.textAlign = 'center';
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
-    ctx.strokeText(p.name, p.x, p.y - HALF - 22);
-    ctx.fillStyle = p.color;
-    ctx.fillText(p.name, p.x, p.y - HALF - 22);
-  }
 
-  function drawBullets() {
-    bullets.forEach(b => {
-      const tailX = b.x - b.dx * 18;
-      const tailY = b.y - b.dy * 18;
-      ctx.beginPath();
-      ctx.moveTo(tailX, tailY);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = b.color;
-      ctx.lineWidth = 4;
-      ctx.globalAlpha = 0.5;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 12, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
-      ctx.globalAlpha = 0.25;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, 7, 0, Math.PI * 2);
-      ctx.fillStyle = b.color;
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    });
-  }
+@socketio.on('place_wall')
+def on_place_wall(data):
+    """Игрок ставит стенку позади себя."""
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("round_active"):
+                return
+            if p["actions_left"] <= 0:
+                return
+            # позиция позади кубика (напротив направления взгляда)
+            wx = p["x"] - p["dir"]["x"] * 50
+            wy = p["y"] - p["dir"]["y"] * 50
+            # ограничения
+            wx = max(25, min(W - 25, wx))
+            wy = max(25, min(H - 25, wy))
+            # не ставить на игрока
+            for other in game["players"].values():
+                if other["hp"] <= 0: continue
+                if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
+                    emit('error_msg', {"text": "Тут игрок"})
+                    return
+            # не ставить на стену
+            for w in game["walls"].values():
+                if w["hp"] <= 0: continue
+                if abs(w["x"] - wx) < 25 and abs(w["y"] - wy) < 25:
+                    return
 
-  function drawParticles() {
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx; p.y += p.vy;
-      p.vx *= 0.95; p.vy *= 0.95;
-      p.life -= 0.03;
-      if (p.life <= 0) { particles.splice(i, 1); continue; }
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-      ctx.fillStyle = p.color;
-      ctx.globalAlpha = p.life;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-  }
+            game["wall_id"] = game.get("wall_id", 0) + 1
+            wid = str(game["wall_id"])
+            game["walls"][wid] = {
+                "x": wx, "y": wy,
+                "hp": WALL_HP,
+                "owner": sid,
+            }
+            p["actions_left"] -= 1
+            emit('wall_placed', {
+                "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
+                "actions_left": p["actions_left"],
+            }, to=code)
+            break
 
-  function drawFlashes() {
-    for (let i = hitFlashes.length - 1; i >= 0; i--) {
-      const f = hitFlashes[i];
-      f.life -= 0.06; f.radius += 5;
-      if (f.life <= 0) { hitFlashes.splice(i, 1); continue; }
-      ctx.beginPath();
-      ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 5;
-      ctx.globalAlpha = f.life;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
 
-  function render() {
-    drawGrid();
-    for (const sid in players) {
-      if (sid === mySid) continue;
-      drawCube(players[sid], false);
-    }
-    if (me) drawCube(me, true);
-    drawBullets();
-    drawParticles();
-    drawFlashes();
-  }
+@socketio.on('shoot')
+def on_shoot(data):
+    sid = request.sid
+    for code, game in GAMES.items():
+        if sid in game["players"]:
+            p = game["players"][sid]
+            if p["hp"] <= 0 or not game.get("round_active"):
+                return
+            if p["actions_left"] <= 0:
+                return
+            p["actions_left"] -= 1
+            emit('bullet_fired', {
+                "sid": sid,
+                "x": p["x"], "y": p["y"],
+                "dir": p["dir"],
+                "color": p["color"],
+                "actions_left": p["actions_left"],
+            }, to=code)
+            break
 
-  function move(dir) {
-    if (moving || !me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
-    haptic('light');
-    moving = true;
-    const dirs = {
-      up:    { x: 0, y: -1 }, down:  { x: 0, y: 1 },
-      left:  { x: -1, y: 0 }, right: { x: 1, y: 0 },
-    };
-    const d = dirs[dir];
-    me.dir = d;
-    const tx = Math.max(HALF, Math.min(W - HALF, me.x + d.x * STEP));
-    const ty = Math.max(HALF, Math.min(H - HALF, me.y + d.y * STEP));
-    const sx = me.x, sy = me.y;
-    const dx = tx - sx, dy = ty - sy;
-    let i = 0;
-    function step() {
-      i++;
-      if (i > ANIM) {
-        me.x = tx; me.y = ty;
-        moving = false;
-        render();
-        socket.emit('move', { x: me.x, y: me.y, dir: me.dir });
-        return;
-      }
-      const t = i / ANIM;
-      me.x = sx + dx * t; me.y = sy + dy * t;
-      render();
-      requestAnimationFrame(step);
-    }
-    step();
-  }
 
-  document.querySelectorAll('.btn').forEach(btn => {
-    if (btn.dataset.dir) {
-      btn.addEventListener('click', () => move(btn.dataset.dir));
-    }
-  });
+@socketio.on('hit')
+def on_hit(data):
+    target_sid = data.get("target_sid")
+    dmg = data.get("dmg", 20)
+    for code, game in GAMES.items():
+        if target_sid in game["players"]:
+            p = game["players"][target_sid]
+            if p["hp"] <= 0:
+                break
+            p["hp"] = max(0, p["hp"] - dmg)
+            emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
+            if p["hp"] <= 0:
+                emit('player_died', {"sid": target_sid}, to=code)
+            break
 
-  document.getElementById('shootBtn').addEventListener('click', () => {
-    if (!me || !roundActive || me.actions_left <= 0 || me.hp <= 0) return;
-    haptic('shot');
-    socket.emit('shoot', {});
-    spawnParticles(me.x + me.dir.x * 30, me.y + me.dir.y * 30, me.color, 8);
-  });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowUp') move('up');
-    else if (e.key === 'ArrowDown') move('down');
-    else if (e.key === 'ArrowLeft') move('left');
-    else if (e.key === 'ArrowRight') move('right');
-    else if (e.key === ' ') { e.preventDefault(); document.getElementById('shootBtn').click(); }
-  });
+@socketio.on('hit_wall')
+def on_hit_wall(data):
+    """Пуля попала в стену."""
+    wid = data.get("wall_id")
+    for code, game in GAMES.items():
+        if wid in game["walls"]:
+            w = game["walls"][wid]
+            w["hp"] -= 1
+            emit('wall_hit', {
+                "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
+            }, to=code)
+            if w["hp"] <= 0:
+                del game["walls"][wid]
+                emit('wall_destroyed', {
+                    "id": wid, "x": w["x"], "y": w["y"],
+                }, to=code)
+            break
 
-  function updateBullets() {
-    for (let i = bullets.length - 1; i >= 0; i--) {
-      const b = bullets[i];
-      b.x += b.dx * BULLET_STEP;
-      b.y += b.dy * BULLET_STEP;
-      b.steps++;
-      if (b.steps % 2 === 0) {
-        particles.push({
-          x: b.x, y: b.y,
-          vx: (Math.random() - 0.5) * 2,
-          vy: (Math.random() - 0.5) * 2,
-          life: 0.6, color: b.color, size: 3,
-        });
-      }
-      let hit = false;
-      for (const sid in players) {
-        if (sid === b.owner) continue;
-        const p = players[sid];
-        if (p.alive === false) continue;
-        const dx = p.x - b.x, dy = p.y - b.y;
-        if ((dx * dx + dy * dy) ** 0.5 < HALF + 4) {
-          hit = true;
-          socket.emit('hit', { target_sid: sid, dmg: BULLET_DMG });
-          break;
-        }
-      }
-      if (hit || b.steps > BULLET_MAX || b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
-        bullets.splice(i, 1);
-      }
-    }
-    renderLoop();
-  }
 
-  function renderLoop() {
-    render();
-    requestAnimationFrame(updateBullets);
-  }
+@socketio.on('disconnect')
+def on_disconnect():
+    sid = request.sid
+    for code, game in list(GAMES.items()):
+        if sid in game["players"]:
+            del game["players"][sid]
+            emit('player_left', {"sid": sid}, to=code)
+            if not game["players"]:
+                del GAMES[code]
+            elif sid == game.get("host") and game["players"]:
+                game["host"] = list(game["players"].keys())[0]
+            break
 
-  render();
-  updateBullets();
-</script>
-</body>
-</html>
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port)
