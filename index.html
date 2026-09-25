@@ -155,7 +155,6 @@
     letter-spacing: 2px; margin-top: 10px; color: #fff;
   }
 
-  /* === ЭМОЦИИ === */
   #emotionBtn {
     position: fixed;
     bottom: 24px;
@@ -249,7 +248,6 @@
   }
   #emotionCooldownText.show { display: block; }
 
-  /* === АНИМАЦИЯ МЕНЮ === */
   @keyframes titleSlam {
     0% { transform: scale(6) rotate(-15deg); opacity: 0; filter: blur(20px); }
     50% { transform: scale(0.9) rotate(2deg); opacity: 1; filter: blur(0); }
@@ -277,11 +275,7 @@
   #menuScreen #codeInput { animation: fadeInUp 0.5s 1.05s both; }
   #menuScreen #joinBtn { animation: fadeInUp 0.5s 1.2s both; }
   #menuScreen #menuStatus { animation: fadeInUp 0.5s 1.35s both; }
-  #menuScreen.shake-screen {
-    animation: shake 0.4s ease-in-out;
-  }
 
-  /* === ВЗРЫВ НА ФОНЕ === */
   #bgFx {
     position: fixed;
     inset: 0;
@@ -390,6 +384,12 @@
     } catch(e) {}
   }
 
+  // ==== ЛИМИТЫ (оптимизация) ====
+  const MAX_PARTICLES = 100;
+  const MAX_FRAGMENTS = 50;
+  const MAX_FLOATING = 10;
+  const MAX_EMOTIONS = 6;
+
   // ==== КОНСТАНТЫ ====
   let W = 1400, H = 1400;
   const VIEW_W = 800, VIEW_H = 800;
@@ -401,6 +401,8 @@
   const EMOTION_CD = 6;
   const EMOTION_LIFE = 3;
   const CRATE_SIZE = 50;
+  const TARGET_FPS = 60;
+  const FRAME_INTERVAL = 1000 / TARGET_FPS;
 
   // ==== СОСТОЯНИЕ ====
   let socket = null;
@@ -420,7 +422,6 @@
   let WALL_COST = 10;
   let COOLDOWN = 0.5;
   let lastAction = 0;
-  let lastEmotionSent = 0;
   let emotionCooldownUntil = 0;
   let bullets = [];
   let particles = [];
@@ -437,6 +438,11 @@
   let cameraX = 0, cameraY = 0;
   let zoneFlashTime = 0;
 
+  // ==== РЕНДЕР-ЛУП ====
+  let loopRunning = false;
+  let lastFrame = 0;
+  let minimapCounter = 0;
+
   const $ = id => document.getElementById(id);
   const menuScreen = $('menuScreen'), lobbyScreen = $('lobbyScreen'), gameScreen = $('gameScreen');
   const nameInput = $('nameInput'), codeInput = $('codeInput');
@@ -444,7 +450,8 @@
   const roomCodeEl = $('roomCode'), lobbyPlayers = $('lobbyPlayers');
   const lobbyStatus = $('lobbyStatus');
   const readyBtn = $('readyBtn'), startBtn = $('startBtn');
-  const canvas = $('canvas'), ctx = canvas.getContext('2d');
+  const canvas = $('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
   const hpView = $('hpView'), coinsView = $('coinsView'), killsView = $('killsView');
   const cdView = $('cdView'), hpWrap = $('hpWrap');
   const winBanner = $('winBanner');
@@ -457,60 +464,113 @@
   const timerInd = $('timerInd');
   const bgFx = $('bgFx');
 
+  // ==== OFFSCREEN CANVAS ДЛЯ КУБИКА (оптимизация) ====
+  const cubeSpriteCanvas = document.createElement('canvas');
+  cubeSpriteCanvas.width = CUBE + 8;
+  cubeSpriteCanvas.height = CUBE + 8;
+  const cubeSpriteCtx = cubeSpriteCanvas.getContext('2d');
+
+  function makeCubeSprite(color) {
+    const c = cubeSpriteCanvas;
+    const cx = cubeSpriteCtx;
+    cx.clearRect(0, 0, c.width, c.height);
+    cx.fillStyle = 'rgba(0,0,0,0.2)';
+    cx.fillRect(4, 4, CUBE, CUBE);
+    cx.fillStyle = color;
+    cx.fillRect(0, 0, CUBE, CUBE);
+    cx.strokeStyle = 'rgba(0,0,0,0.6)';
+    cx.lineWidth = 2;
+    cx.strokeRect(0, 0, CUBE, CUBE);
+  }
+  const _cubeSpriteCache = {};
+  function getCubeSprite(color) {
+    if (!_cubeSpriteCache[color]) {
+      const c = document.createElement('canvas');
+      c.width = CUBE + 8;
+      c.height = CUBE + 8;
+      const cx = c.getContext('2d');
+      cx.fillStyle = 'rgba(0,0,0,0.2)';
+      cx.fillRect(4, 4, CUBE, CUBE);
+      cx.fillStyle = color;
+      cx.fillRect(0, 0, CUBE, CUBE);
+      cx.strokeStyle = 'rgba(0,0,0,0.6)';
+      cx.lineWidth = 2;
+      cx.strokeRect(0, 0, CUBE, CUBE);
+      _cubeSpriteCache[color] = c;
+    }
+    return _cubeSpriteCache[color];
+  }
+  const _wallSpriteCache = {};
+  function getWallSprite(hpRatio) {
+    const key = hpRatio > 0.5 ? 'high' : (hpRatio > 0.25 ? 'mid' : 'low');
+    if (!_wallSpriteCache[key]) {
+      const c = document.createElement('canvas');
+      c.width = WALL_SIZE + 6;
+      c.height = WALL_SIZE + 6;
+      const cx = c.getContext('2d');
+      cx.fillStyle = 'rgba(0,0,0,0.2)';
+      cx.fillRect(3, 3, WALL_SIZE, WALL_SIZE);
+      cx.fillStyle = '#5a6f98';
+      cx.fillRect(0, 0, WALL_SIZE, WALL_SIZE);
+      cx.strokeStyle = 'rgba(0,0,0,0.35)';
+      cx.lineWidth = 1;
+      for (let i = 1; i < 3; i++) {
+        cx.beginPath();
+        cx.moveTo(0, i * WALL_SIZE / 3);
+        cx.lineTo(WALL_SIZE, i * WALL_SIZE / 3);
+        cx.stroke();
+      }
+      const borderColor = key === 'high' ? '#2c3e50' : (key === 'mid' ? '#f39c12' : '#e74c3c');
+      cx.strokeStyle = borderColor;
+      cx.lineWidth = 2;
+      cx.strokeRect(0, 0, WALL_SIZE, WALL_SIZE);
+      _wallSpriteCache[key] = c;
+    }
+    return _wallSpriteCache[key];
+  }
+
   if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
     const u = tg.initDataUnsafe.user;
     const name = u.first_name || u.username || '';
     if (name) nameInput.value = name.slice(0, 12);
   }
 
-  // ==== ВЗРЫВ НА ФОНЕ (при открытии) ====
   function createBgExplosion() {
     const cx = window.innerWidth / 2;
     const cy = window.innerHeight / 2;
-    const count = 90;
+    const count = 50;
+    const frag = document.createDocumentFragment();
     for (let i = 0; i < count; i++) {
       const spark = document.createElement('div');
       spark.className = 'bg-spark';
       const angle = Math.random() * Math.PI * 2;
       const dist = 200 + Math.random() * 500;
-      const dx = Math.cos(angle) * dist;
-      const dy = Math.sin(angle) * dist;
       spark.style.left = cx + 'px';
       spark.style.top = cy + 'px';
-      spark.style.setProperty('--dx', dx + 'px');
-      spark.style.setProperty('--dy', dy + 'px');
-      const dur = 0.8 + Math.random() * 1.2;
-      spark.style.animation = `sparkFly ${dur}s cubic-bezier(0.15, 0.6, 0.4, 1) forwards`;
+      spark.style.setProperty('--dx', Math.cos(angle) * dist + 'px');
+      spark.style.setProperty('--dy', Math.sin(angle) * dist + 'px');
+      spark.style.animation = `sparkFly ${0.8 + Math.random()}s cubic-bezier(0.15, 0.6, 0.4, 1) forwards`;
       spark.style.animationDelay = (Math.random() * 0.3) + 's';
-      // цвет
       const colors = ['#ffcc44', '#ff8800', '#ff4400', '#fff', '#ff2200'];
-      spark.style.background = colors[Math.floor(Math.random() * colors.length)];
-      bgFx.appendChild(spark);
-      setTimeout(() => spark.remove(), 2500);
+      spark.style.background = colors[(Math.random() * colors.length) | 0];
+      frag.appendChild(spark);
     }
-    // "удар" по экрану
+    bgFx.appendChild(frag);
+    setTimeout(() => { bgFx.innerHTML = ''; }, 2500);
     document.body.style.animation = 'shake 0.4s ease-in-out';
     setTimeout(() => { document.body.style.animation = ''; }, 400);
     haptic('explosion');
   }
-  // запускаем через 0.3 сек после загрузки
   setTimeout(createBgExplosion, 300);
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     $(id).classList.add('active');
     emotionBtn.classList.toggle('hidden', id !== 'gameScreen');
-    if (id !== 'gameScreen') {
-      emotionPanel.classList.remove('show');
-    }
+    if (id !== 'gameScreen') emotionPanel.classList.remove('show');
     if (id === 'menuScreen') {
-      // перезапуск анимации меню
       const h = menuScreen.querySelector('h1');
-      if (h) {
-        h.style.animation = 'none';
-        void h.offsetWidth;
-        h.style.animation = '';
-      }
+      if (h) { h.style.animation = 'none'; void h.offsetWidth; h.style.animation = ''; }
     }
   }
 
@@ -518,37 +578,42 @@
     return (performance.now() - lastAction) / 1000 >= COOLDOWN;
   }
 
+  // кэш кнопок
+  const ctrlBtnFarm = $('farmBtn');
+  const ctrlBtnWall = $('wallBtn');
+  const ctrlBtnShoot = $('shootBtn');
+  const ctrlBtns = [ctrlBtnFarm, ctrlBtnWall, ctrlBtnShoot];
+
   function updateCD() {
     const elapsed = (performance.now() - lastAction) / 1000;
     const left = Math.max(0, COOLDOWN - elapsed);
     const progress = 1 - left / COOLDOWN;
-
     if (left > 0) {
       cdView.textContent = 'КД: ' + left.toFixed(1);
       cdView.classList.remove('ready');
-      document.querySelectorAll('.btn').forEach(b => {
-        if (b.id === 'farmBtn' || b.id === 'wallBtn' || b.id === 'shootBtn') {
-          b.disabled = true;
-          b.classList.add('recharging');
-          const ring = b.querySelector('.cd-ring');
-          const num = b.querySelector('.cd-num');
-          if (ring) ring.style.background =
-            `conic-gradient(rgba(0,0,0,0.7) ${progress * 360}deg, transparent ${progress * 360}deg)`;
-          if (num) num.textContent = left.toFixed(1);
-        }
-      });
+      for (let i = 0; i < ctrlBtns.length; i++) {
+        const b = ctrlBtns[i];
+        b.disabled = true;
+        b.classList.add('recharging');
+        const ring = b.querySelector('.cd-ring');
+        const num = b.querySelector('.cd-num');
+        if (ring) ring.style.background =
+          `conic-gradient(rgba(0,0,0,0.7) ${progress * 360}deg, transparent ${progress * 360}deg)`;
+        if (num) num.textContent = left.toFixed(1);
+      }
     } else {
       cdView.textContent = 'КД: 0.0';
       cdView.classList.add('ready');
-      document.querySelectorAll('.btn').forEach(b => {
+      for (let i = 0; i < ctrlBtns.length; i++) {
+        const b = ctrlBtns[i];
         b.disabled = false;
         b.classList.remove('recharging');
         const ring = b.querySelector('.cd-ring');
         if (ring) ring.style.background = 'transparent';
-      });
+      }
     }
   }
-  setInterval(updateCD, 50);
+  setInterval(updateCD, 80);
 
   function updateBonusTimers() {
     const now = Date.now() / 1000;
@@ -559,20 +624,17 @@
     bigInd.style.display = bigLeft > 0 ? 'inline' : 'none';
     bigTime.textContent = bigLeft.toFixed(1);
   }
-  setInterval(updateBonusTimers, 100);
+  setInterval(updateBonusTimers, 150);
 
   function updateTimer() {
     const m = Math.floor(gameElapsed / 60);
     const s = Math.floor(gameElapsed % 60);
     timerInd.textContent = `⏱ ${m}:${s.toString().padStart(2,'0')}`;
     timerInd.classList.remove('warn', 'danger');
-    if (gameElapsed >= 60 && !zone.active) {
-      timerInd.classList.add('warn');
-    } else if (zone.active) {
-      timerInd.classList.add('danger');
-    }
+    if (gameElapsed >= 60 && !zone.active) timerInd.classList.add('warn');
+    else if (zone.active) timerInd.classList.add('danger');
   }
-  setInterval(updateTimer, 200);
+  setInterval(updateTimer, 250);
 
   function updateEmotionCooldown() {
     const now = Date.now();
@@ -589,7 +651,7 @@
       emotionCooldownText.classList.remove('show');
     }
   }
-  setInterval(updateEmotionCooldown, 100);
+  setInterval(updateEmotionCooldown, 150);
 
   function showWinBanner(text) {
     winBanner.innerHTML = text;
@@ -597,12 +659,12 @@
     haptic('hit');
   }
 
-  // ==== СОКЕТ ====
   function connect() {
     socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
     socket.on('connect', () => { mySid = socket.id; });
 
     socket.on('joined', (data) => {
+      mySid = socket.id;  // <-- ФИКС чёрных кубиков
       roomCode = data.code;
       myColor = data.my_color;
       players = data.players;
@@ -622,6 +684,8 @@
         myKills = me.kills;
         myShieldUntil = me.shield_until || 0;
         myBigBulletsUntil = me.big_bullets_until || 0;
+      } else {
+        console.warn('me не найден в joined! mySid:', mySid);
       }
       roomCodeEl.textContent = roomCode;
       showScreen('lobbyScreen');
@@ -636,7 +700,7 @@
     socket.on('player_left', (data) => {
       delete players[data.sid];
       updateLobby();
-      render();
+      startLoop();
     });
 
     socket.on('ready_changed', (data) => {
@@ -646,6 +710,7 @@
     });
 
     socket.on('game_started', (data) => {
+      mySid = socket.id;  // <-- ФИКС чёрных кубиков
       players = data.players;
       walls = data.walls || {};
       farms = data.farms || {};
@@ -663,22 +728,21 @@
       gameStarted = true;
       updateHUD();
       showScreen('gameScreen');
-      // камера сразу к игроку
       if (me) { cameraX = me.x - VIEW_W/2; cameraY = me.y - VIEW_H/2; }
-      render();
+      startLoop();
     });
 
     socket.on('tick_update', (data) => {
       if (data.players) {
         for (const sid in data.players) {
-          if (players[sid]) {
-            players[sid].coins = data.players[sid].coins;
-            players[sid].hp = data.players[sid].hp;
-            if (data.players[sid].kills !== undefined) {
-              players[sid].kills = data.players[sid].kills;
-            }
-            players[sid].shield_until = data.players[sid].shield_until || 0;
-            players[sid].big_bullets_until = data.players[sid].big_bullets_until || 0;
+          const p = players[sid];
+          if (p) {
+            const u = data.players[sid];
+            p.coins = u.coins;
+            p.hp = u.hp;
+            if (u.kills !== undefined) p.kills = u.kills;
+            p.shield_until = u.shield_until || 0;
+            p.big_bullets_until = u.big_bullets_until || 0;
           }
         }
         if (me && players[mySid]) {
@@ -697,38 +761,26 @@
       }
       if (data.crates) {
         for (const cid in data.crates) {
-          if (crates[cid]) {
-            crates[cid].hp = data.crates[cid].hp;
-          }
+          if (crates[cid]) crates[cid].hp = data.crates[cid].hp;
         }
       }
-      if (data.zone) {
-        zone = data.zone;
-      }
-      if (typeof data.elapsed === 'number') {
-        gameElapsed = data.elapsed;
-      }
+      if (data.zone) zone = data.zone;
+      if (typeof data.elapsed === 'number') gameElapsed = data.elapsed;
     });
 
-    socket.on('zone_warning', () => {
-      // мигаем красным
-      zoneFlashTime = 1.0;
-      haptic('explosion');
-    });
-
+    socket.on('zone_warning', () => { zoneFlashTime = 1.0; haptic('explosion'); startLoop(); });
     socket.on('zone_update', (data) => {
-      zone.left = data.left;
-      zone.top = data.top;
-      zone.right = data.right;
-      zone.bottom = data.bottom;
+      zone.left = data.left; zone.top = data.top;
+      zone.right = data.right; zone.bottom = data.bottom;
       zone.active = true;
+      startLoop();
     });
 
     socket.on('player_moved', (data) => {
       const p = players[data.sid];
       if (p) {
         p.x = data.x; p.y = data.y; p.dir = data.dir;
-        render();
+        startLoop();
       }
     });
 
@@ -748,67 +800,53 @@
           dmg: data.dmg || 5,
           pierce: data.pierce,
           big: isBig,
-          radius: isBig ? 12 : 6,
-          tailLen: isBig ? 36 : 22,
+          radius: isBig ? 10 : 5,
+          tailLen: isBig ? 28 : 16,
           hit_targets: [],
         });
       }
-      spawnMuzzleFlash(
-        data.x + data.dir.x * 30,
-        data.y + data.dir.y * 30,
-        data.color,
-        data.dir,
-        isBig
-      );
-      spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, isBig ? 14 : 8);
+      spawnMuzzleFlash(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, data.dir, isBig);
+      startLoop();
     });
 
     socket.on('player_hit', (data) => {
-      if (data.sid === mySid) {
-        myHp = data.hp;
-      } else {
-        const p = players[data.sid];
-        if (p) p.hp = data.hp;
-      }
+      if (data.sid === mySid) myHp = data.hp;
+      else { const p = players[data.sid]; if (p) p.hp = data.hp; }
       const p = players[data.sid];
-      if (p) {
-        spawnParticles(p.x, p.y, data.zone ? '#ff2020' : '#ff4040', 12);
-        spawnFlash(p.x, p.y);
-      }
+      if (p) { spawnParticles(p.x, p.y, data.zone ? '#ff2020' : '#ff4040', 6); spawnFlash(p.x, p.y); }
       haptic('hit');
-      render();
+      startLoop();
       updateHUD();
     });
 
     socket.on('player_shielded', (data) => {
       const p = players[data.sid];
       if (p) {
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 6; i++) {
+          if (particles.length >= MAX_PARTICLES) break;
           const angle = Math.random() * Math.PI * 2;
           const speed = 3 + Math.random() * 3;
           particles.push({
             x: p.x, y: p.y,
             vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-            life: 1, color: '#00e0ff', size: 3 + Math.random() * 3,
+            life: 1, color: '#00e0ff', size: 3,
           });
         }
       }
       if (data.sid === mySid) haptic('hit');
+      startLoop();
     });
 
     socket.on('player_died', (data) => {
       const p = players[data.sid];
       if (p) {
         p.hp = 0; p.alive = false;
-        spawnParticles(p.x, p.y, data.zone ? '#ff2020' : p.color, 30);
+        spawnParticles(p.x, p.y, data.zone ? '#ff2020' : p.color, 15);
         spawnFlash(p.x, p.y);
-        render();
+        startLoop();
       }
       if (data.sid === mySid) {
-        setTimeout(() => {
-          showScreen('menuScreen');
-          winBanner.classList.remove('show');
-        }, 3000);
+        setTimeout(() => { showScreen('menuScreen'); winBanner.classList.remove('show'); }, 3000);
       }
     });
 
@@ -816,81 +854,48 @@
       walls[data.id] = { x: data.x, y: data.y, hp: data.hp };
       if (data.my_coins !== undefined) myCoins = data.my_coins;
       if (me) me.coins = myCoins;
-      spawnParticles(data.x, data.y, '#5a7fd8', 10);
-      render();
+      spawnParticles(data.x, data.y, '#5a7fd8', 5);
+      startLoop();
       updateHUD();
     });
-
     socket.on('wall_hit', (data) => {
       if (walls[data.id]) walls[data.id].hp = data.hp;
-      spawnParticles(data.x, data.y, '#8fa8d8', 5);
-      render();
+      spawnParticles(data.x, data.y, '#8fa8d8', 3);
+      startLoop();
     });
-
     socket.on('wall_destroyed', (data) => {
       if (walls[data.id]) delete walls[data.id];
-      for (let i = 0; i < 18; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 5;
-        wallFragments.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, size: 4 + Math.random() * 6,
-          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.3,
-        });
-      }
-      render();
+      spawnFragments(data.x, data.y, 8, '#5a7fd8');
+      startLoop();
     });
 
     socket.on('farm_placed', (data) => {
       farms[data.id] = { x: data.x, y: data.y, hp: data.hp, last_income: 0 };
       if (data.my_coins !== undefined) myCoins = data.my_coins;
       if (me) me.coins = myCoins;
-      spawnParticles(data.x, data.y, '#f1c40f', 15);
-      floatingTexts.push({
-        x: data.x, y: data.y - 40,
-        text: '🏭',
-        color: '#f1c40f',
-        life: 1.5, vy: -1.5,
-      });
-      render();
+      spawnParticles(data.x, data.y, '#f1c40f', 6);
+      addFloatingText(data.x, data.y - 40, '🏭', '#f1c40f', 1.5, -1.5);
+      startLoop();
       updateHUD();
     });
-
     socket.on('farm_hit', (data) => {
       if (farms[data.id]) farms[data.id].hp = data.hp;
-      spawnParticles(data.x, data.y, '#d4a017', 6);
-      render();
+      spawnParticles(data.x, data.y, '#d4a017', 3);
+      startLoop();
     });
-
     socket.on('farm_destroyed', (data) => {
       if (farms[data.id]) delete farms[data.id];
-      for (let i = 0; i < 18; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 5;
-        wallFragments.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, size: 5 + Math.random() * 5,
-          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.3,
-          color: '#f1c40f',
-        });
-      }
-      render();
+      spawnFragments(data.x, data.y, 8, '#f1c40f');
+      startLoop();
     });
-
     socket.on('farm_income', (data) => {
-      floatingTexts.push({
-        x: data.x, y: data.y - 30,
-        text: '+' + (data.amount || 1),
-        color: '#f1c40f',
-        life: 1.5, vy: -1.2,
-      });
+      addFloatingText(data.x, data.y - 30, '+' + (data.amount || 1), '#f1c40f', 1.5, -1.2);
       if (data.owner === mySid) {
         myCoins += (data.amount || 1);
         if (me) me.coins = myCoins;
         updateHUD();
       }
+      startLoop();
     });
 
     socket.on('crate_spawned', (data) => {
@@ -901,93 +906,51 @@
         spawnAnim: 1.0,
         hitFlash: 0,
       };
-      for (let i = 0; i < 20; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 4;
-        particles.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, color: '#ffd700', size: 3 + Math.random() * 3,
-        });
-      }
-      render();
+      spawnParticles(data.x, data.y, '#ffd700', 8);
+      startLoop();
     });
-
     socket.on('crate_hit', (data) => {
       if (crates[data.id]) {
         crates[data.id].hp = data.hp;
         crates[data.id].hitFlash = 1.0;
       }
-      spawnParticles(data.x, data.y, '#c08040', 6);
-      render();
+      spawnParticles(data.x, data.y, '#c08040', 3);
+      startLoop();
     });
-
     socket.on('crate_destroyed', (data) => {
       if (crates[data.id]) delete crates[data.id];
-      for (let i = 0; i < 30; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 3 + Math.random() * 6;
-        wallFragments.push({
-          x: data.x, y: data.y,
-          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          life: 1, size: 5 + Math.random() * 6,
-          rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.4,
-          color: '#8b5a2b',
-        });
-      }
+      spawnFragments(data.x, data.y, 12, '#8b5a2b');
       spawnFlash(data.x, data.y);
-      if (data.bonus === 'shield') {
-        floatingTexts.push({
-          x: data.x, y: data.y - 30,
-          text: '🛡 ЩИТ!',
-          color: '#00e0ff',
-          life: 2, vy: -1.0,
-        });
-      } else if (data.bonus === 'big_bullets') {
-        floatingTexts.push({
-          x: data.x, y: data.y - 30,
-          text: '🔵 БОЛЬШИЕ ПУЛИ!',
-          color: '#ff8800',
-          life: 2, vy: -1.0,
-        });
-      }
+      if (data.bonus === 'shield') addFloatingText(data.x, data.y - 30, '🛡 ЩИТ!', '#00e0ff', 2, -1.0);
+      else if (data.bonus === 'big_bullets') addFloatingText(data.x, data.y - 30, '🔵 БОЛЬШИЕ ПУЛИ!', '#ff8800', 2, -1.0);
       if (data.player_sid === mySid) haptic('bonus');
-      render();
+      startLoop();
     });
 
     socket.on('gun_upgraded', (data) => {
       if (data.sid === mySid) {
         if (data.my_coins !== undefined) myCoins = data.my_coins;
-        if (me) {
-          me.gun_level = data.gun_level;
-          me.coins = myCoins;
-        }
-        if (GUN_LEVELS[data.gun_level]) {
-          floatingTexts.push({
-            x: me.x, y: me.y - 40,
-            text: GUN_LEVELS[data.gun_level].name,
-            color: '#e67e22', life: 2, vy: -0.8,
-          });
+        if (me) { me.gun_level = data.gun_level; me.coins = myCoins; }
+        if (GUN_LEVELS[data.gun_level] && me) {
+          addFloatingText(me.x, me.y - 40, GUN_LEVELS[data.gun_level].name, '#e67e22', 2, -0.8);
         }
       } else {
         const p = players[data.sid];
         if (p) p.gun_level = data.gun_level;
       }
       updateHUD();
+      startLoop();
     });
 
     socket.on('emotion_shown', (data) => {
+      if (activeEmotions.length >= MAX_EMOTIONS) activeEmotions.shift();
       activeEmotions.push({
-        x: data.x,
-        y: data.y - 60,
-        emoji: data.emoji,
-        life: EMOTION_LIFE,
-        rotation: 0,
-        scale: 0,
+        x: data.x, y: data.y - 60,
+        emoji: data.emoji, life: EMOTION_LIFE, rotation: 0,
       });
       if (data.sid === mySid) haptic('emotion');
+      startLoop();
     });
-
     socket.on('emotion_cooldown', (data) => {
       const left = data.left || 0;
       emotionCooldownUntil = Date.now() + left * 1000;
@@ -996,28 +959,18 @@
 
     socket.on('game_over', (data) => {
       showWinBanner('🏆 ' + data.winner + '<small>побеждает!</small>');
-      setTimeout(() => {
-        winBanner.classList.remove('show');
-        showScreen('menuScreen');
-      }, 4000);
+      setTimeout(() => { winBanner.classList.remove('show'); showScreen('menuScreen'); }, 4000);
     });
 
     socket.on('error_msg', (data) => {
       menuStatus.textContent = data.text;
-      if (gameStarted && me) {
-        floatingTexts.push({
-          x: me.x, y: me.y - 40,
-          text: data.text, color: '#e74c3c', life: 1.5, vy: -0.6,
-        });
-      }
+      if (gameStarted && me) addFloatingText(me.x, me.y - 40, data.text, '#e74c3c', 1.5, -0.6);
     });
-
     socket.on('on_cooldown', () => {
       haptic('light');
       cdView.style.color = '#e74c3c';
       setTimeout(() => { cdView.style.color = ''; }, 250);
     });
-
     socket.on('disconnect', () => {
       menuStatus.textContent = 'Отключён';
       showScreen('menuScreen');
@@ -1035,20 +988,15 @@
       lobbyPlayers.appendChild(chip);
     });
     lobbyStatus.textContent = `Игроков: ${list.length} / 8`;
-
     const allReady = list.length >= 1 && (list.length === 1 || list.every(p => p.ready));
     startBtn.disabled = !allReady;
     if (!allReady) {
       const notReady = list.filter(p => !p.ready).map(p => p.name);
-      if (list.length < 2) {
-        startBtn.textContent = '▶️ Начать (тест)';
-      } else {
-        startBtn.textContent = 'Ждём: ' + notReady.join(', ');
-      }
+      if (list.length < 2) startBtn.textContent = '▶️ Начать (тест)';
+      else startBtn.textContent = 'Ждём: ' + notReady.join(', ');
     } else {
       startBtn.textContent = '▶️ Начать игру';
     }
-
     if (players[mySid]) {
       readyBtn.textContent = players[mySid].ready ? '❌ Отменить готовность' : '✅ Я готов';
     }
@@ -1068,7 +1016,6 @@
     if (!socket) connect();
     setTimeout(() => socket.emit('create_game', { name }), 300);
   });
-
   joinBtn.addEventListener('click', () => {
     const name = nameInput.value.trim();
     const code = codeInput.value.trim().toUpperCase();
@@ -1077,19 +1024,9 @@
     if (!socket) connect();
     setTimeout(() => socket.emit('join_game', { name, code }), 300);
   });
-
-  readyBtn.addEventListener('click', () => {
-    if (socket) socket.emit('toggle_ready', {});
-  });
-
-  startBtn.addEventListener('click', () => {
-    if (socket) socket.emit('start_game', { code: roomCode });
-  });
-
-  emotionBtn.addEventListener('click', () => {
-    emotionPanel.classList.toggle('show');
-    haptic('light');
-  });
+  readyBtn.addEventListener('click', () => { if (socket) socket.emit('toggle_ready', {}); });
+  startBtn.addEventListener('click', () => { if (socket) socket.emit('start_game', { code: roomCode }); });
+  emotionBtn.addEventListener('click', () => { emotionPanel.classList.toggle('show'); haptic('light'); });
 
   emotionPanel.querySelectorAll('.emotion-option').forEach(opt => {
     opt.addEventListener('click', () => {
@@ -1109,7 +1046,6 @@
       haptic('emotion');
     });
   });
-
   document.addEventListener('click', (e) => {
     if (!emotionPanel.classList.contains('show')) return;
     if (emotionPanel.contains(e.target)) return;
@@ -1118,40 +1054,54 @@
   });
 
   function spawnParticles(x, y, color, count = 8) {
+    if (particles.length >= MAX_PARTICLES) return;
+    count = Math.min(count, MAX_PARTICLES - particles.length);
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 3;
+      particles.push({
+        x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        life: 1, color, size: 2 + Math.random() * 2,
+      });
+    }
+  }
+  function spawnFlash(x, y) {
+    if (hitFlashes.length > 20) hitFlashes.shift();
+    hitFlashes.push({ x, y, life: 1, radius: 10 });
+  }
+  function spawnFragments(x, y, count, color) {
+    if (wallFragments.length >= MAX_FRAGMENTS) return;
+    count = Math.min(count, MAX_FRAGMENTS - wallFragments.length);
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 2 + Math.random() * 4;
-      particles.push({
+      wallFragments.push({
         x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-        life: 1, color, size: 2 + Math.random() * 3,
+        life: 1, size: 4 + Math.random() * 5,
+        rot: Math.random() * Math.PI, vrot: (Math.random() - 0.5) * 0.3, color,
       });
     }
   }
-
-  function spawnFlash(x, y) {
-    hitFlashes.push({ x, y, life: 1, radius: 10 });
+  function addFloatingText(x, y, text, color, life, vy) {
+    if (floatingTexts.length >= MAX_FLOATING) floatingTexts.shift();
+    floatingTexts.push({ x, y, text, color, life, vy });
   }
-
   function spawnMuzzleFlash(x, y, color, dir, big) {
-    const count = big ? 12 : 7;
+    const count = big ? 6 : 4;
     const baseAngle = Math.atan2(dir.y, dir.x);
     for (let i = 0; i < count; i++) {
+      if (particles.length >= MAX_PARTICLES) break;
       const angle = baseAngle + (Math.random() - 0.5) * 0.8;
-      const speed = 3 + Math.random() * 5;
+      const speed = 3 + Math.random() * 4;
       particles.push({
-        x, y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 0.7, color,
-        size: big ? 4 + Math.random() * 3 : 2 + Math.random() * 3,
+        x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        life: 0.6, color, size: big ? 3 : 2,
       });
     }
-    hitFlashes.push({ x, y, life: 0.5, radius: 6 });
+    spawnFlash(x, y);
   }
 
-  // ==== РИСОВАНИЕ ====
   function drawGrid() {
-    // определяем видимую область
     const startX = Math.max(0, Math.floor(cameraX / 50) * 50);
     const startY = Math.max(0, Math.floor(cameraY / 50) * 50);
     const endX = Math.min(W, cameraX + VIEW_W + 50);
@@ -1160,33 +1110,24 @@
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
 
-    // фон зоны (вне safe zone) — красная
     if (zone.active) {
       const zLeft = zone.left;
       const zTop = zone.top;
       const zRight = W - zone.right;
       const zBottom = H - zone.bottom;
-
-      // 4 прямоугольника вокруг safe zone
       ctx.fillStyle = 'rgba(231,76,60,0.35)';
-      // верх
       if (zTop > cameraY) ctx.fillRect(cameraX, cameraY, VIEW_W, Math.max(0, zTop - cameraY));
-      // низ
       if (zBottom < cameraY + VIEW_H) ctx.fillRect(cameraX, zBottom, VIEW_W, Math.max(0, cameraY + VIEW_H - zBottom));
-      // лево
       if (zLeft > cameraX) {
         const top = Math.max(cameraY, zTop);
         const bottom = Math.min(cameraY + VIEW_H, zBottom);
         ctx.fillRect(cameraX, top, Math.max(0, zLeft - cameraX), Math.max(0, bottom - top));
       }
-      // право
       if (zRight < cameraX + VIEW_W) {
         const top = Math.max(cameraY, zTop);
         const bottom = Math.min(cameraY + VIEW_H, zBottom);
         ctx.fillRect(zRight, top, Math.max(0, cameraX + VIEW_W - zRight), Math.max(0, bottom - top));
       }
-
-      // красная обводка safe zone
       ctx.strokeStyle = zone.warn ? 'rgba(255,100,100,0.9)' : 'rgba(231,76,60,0.9)';
       ctx.lineWidth = 3;
       ctx.setLineDash([10, 6]);
@@ -1196,88 +1137,68 @@
 
     ctx.strokeStyle = '#e8e8ec';
     ctx.lineWidth = 1;
+    ctx.beginPath();
     for (let x = startX; x <= endX; x += 50) {
-      ctx.beginPath();
       ctx.moveTo(x, cameraY);
       ctx.lineTo(x, cameraY + VIEW_H);
-      ctx.stroke();
     }
     for (let y = startY; y <= endY; y += 50) {
-      ctx.beginPath();
       ctx.moveTo(cameraX, y);
       ctx.lineTo(cameraX + VIEW_W, y);
-      ctx.stroke();
     }
+    ctx.stroke();
 
-    // мигающая рамка при zone_warning
     if (zoneFlashTime > 0) {
       ctx.fillStyle = `rgba(255,0,0,${zoneFlashTime * 0.5})`;
       ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
-      zoneFlashTime -= 0.02;
+      zoneFlashTime -= 0.04;
+      if (zoneFlashTime < 0) zoneFlashTime = 0;
     }
   }
 
-  function drawCube(p, isMe) {
+  function drawCube(p, isMe, now) {
     if (p.alive === false) return;
-    const now = Date.now() / 1000;
     const shielded = (p.shield_until || 0) > now;
-
-    // не рисуем если далеко за пределами экрана
     if (p.x < cameraX - 100 || p.x > cameraX + VIEW_W + 100 ||
         p.y < cameraY - 100 || p.y > cameraY + VIEW_H + 100) return;
 
-    const x = p.x - HALF, y = p.y - HALF;
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
+    const px = Math.floor(p.x - HALF);
+    const py = Math.floor(p.y - HALF);
 
-    const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
-    grad.addColorStop(0, lighten(p.color, 20));
-    grad.addColorStop(1, darken(p.color, 30));
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, CUBE, CUBE);
+    // offscreen sprite кубика
+    const sprite = getCubeSprite(p.color);
+    ctx.drawImage(sprite, px - 4, py - 4);
 
-    ctx.strokeStyle = isMe ? '#000' : 'rgba(0,0,0,0.6)';
-    ctx.lineWidth = isMe ? 3 : 2;
-    ctx.strokeRect(x, y, CUBE, CUBE);
+    if (isMe) {
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(px, py, CUBE, CUBE);
+    }
 
+    // ствол
     const lvl = p.gun_level || 0;
     const barrelLen = 22 + lvl * 5;
     const barrelW = 10 + lvl * 2;
     const big = (p.big_bullets_until || 0) > now;
     ctx.save();
-    ctx.translate(p.x, p.y);
+    ctx.translate(Math.floor(p.x), Math.floor(p.y));
     ctx.rotate(Math.atan2(p.dir.y, p.dir.x));
     ctx.fillStyle = darken(p.color, 50);
     ctx.fillRect(10, -barrelW / 2, barrelLen, barrelW);
     ctx.fillStyle = big ? '#ff8800' : (lvl >= 4 ? '#00e0ff' : '#222');
     ctx.fillRect(10 + barrelLen - 6, -barrelW / 2 - 1, 6, barrelW + 2);
-    if (lvl >= 3) {
-      ctx.fillStyle = darken(p.color, 40);
-      ctx.fillRect(10, -barrelW / 2 - 6, barrelLen - 4, 4);
-      ctx.fillRect(10, barrelW / 2 + 2, barrelLen - 4, 4);
-    }
     ctx.restore();
 
     if (shielded) {
       const t = now * 4;
       const pulse = 1 + Math.sin(t) * 0.08;
       const radius = (CUBE / 2 + 18) * pulse;
-      const shieldGrad = ctx.createRadialGradient(p.x, p.y, radius * 0.4, p.x, p.y, radius);
-      shieldGrad.addColorStop(0, 'rgba(0,224,255,0.05)');
-      shieldGrad.addColorStop(0.7, 'rgba(0,180,255,0.25)');
-      shieldGrad.addColorStop(1, 'rgba(0,224,255,0.6)');
       ctx.beginPath();
       ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = shieldGrad;
+      ctx.fillStyle = 'rgba(0,180,255,0.2)';
       ctx.fill();
       ctx.strokeStyle = '#00e0ff';
       ctx.lineWidth = 2.5;
-      ctx.stroke();
-      const ringR = (CUBE / 2 + 18) + ((t * 20) % 20);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(0,224,255,${1 - ((t * 20) % 20) / 20})`;
-      ctx.lineWidth = 2;
       ctx.stroke();
     }
 
@@ -1288,8 +1209,7 @@
     ctx.fillRect(p.x - hpW / 2 - 2, p.y - HALF - 22, hpW + 4, hpH + 4);
     ctx.fillStyle = '#111';
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW, hpH);
-    const hpColor = ratio > 0.6 ? '#2ecc71' : (ratio > 0.3 ? '#f39c12' : '#e74c3c');
-    ctx.fillStyle = hpColor;
+    ctx.fillStyle = ratio > 0.6 ? '#2ecc71' : (ratio > 0.3 ? '#f39c12' : '#e74c3c');
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW * ratio, hpH);
 
     ctx.font = 'bold 12px Arial';
@@ -1304,98 +1224,51 @@
   function drawWalls() {
     for (const wid in walls) {
       const w = walls[wid];
-      const x = w.x - WALL_SIZE / 2, y = w.y - WALL_SIZE / 2;
+      const x = Math.floor(w.x - WALL_SIZE / 2);
+      const y = Math.floor(w.y - WALL_SIZE / 2);
       if (x + WALL_SIZE < cameraX || x > cameraX + VIEW_W ||
           y + WALL_SIZE < cameraY || y > cameraY + VIEW_H) continue;
-
       const hpRatio = Math.max(0, w.hp / 4);
-
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.fillRect(x + 3, y + 3, WALL_SIZE, WALL_SIZE);
-
-      const grad = ctx.createLinearGradient(x, y, x + WALL_SIZE, y + WALL_SIZE);
-      grad.addColorStop(0, '#7a8fb8');
-      grad.addColorStop(1, '#4a5f88');
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, WALL_SIZE, WALL_SIZE);
-
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i < 3; i++) {
-        ctx.beginPath();
-        ctx.moveTo(x, y + i * WALL_SIZE / 3);
-        ctx.lineTo(x + WALL_SIZE, y + i * WALL_SIZE / 3);
-        ctx.stroke();
-      }
-      ctx.strokeStyle = hpRatio > 0.5 ? '#2c3e50' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, WALL_SIZE, WALL_SIZE);
+      const sprite = getWallSprite(hpRatio);
+      ctx.drawImage(sprite, x - 3, y - 3);
     }
   }
 
-  let wheelAngle = 0;
-  function drawFarms() {
-    wheelAngle += 0.05;
+  function drawFarms(now) {
     for (const fid in farms) {
       const f = farms[fid];
       const x = f.x, y = f.y;
-      if (x < cameraX - 50 || x > cameraX + VIEW_W + 50 ||
-          y < cameraY - 50 || y > cameraY + VIEW_H + 50) continue;
+      if (x < cameraX - 60 || x > cameraX + VIEW_W + 60 ||
+          y < cameraY - 60 || y > cameraY + VIEW_H + 60) continue;
       const hpRatio = Math.max(0, f.hp / 8);
 
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      ctx.fillRect(x - 24, y - 24, 52, 52);
-
-      const grad = ctx.createLinearGradient(x - 22, y - 22, x + 22, y + 22);
-      grad.addColorStop(0, '#d4a017');
-      grad.addColorStop(1, '#8a6a10');
-      ctx.fillStyle = grad;
+      ctx.fillStyle = '#b8901a';
       ctx.fillRect(x - 22, y - 22, 44, 44);
-
       ctx.strokeStyle = hpRatio > 0.5 ? '#6a4a0a' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.lineWidth = 2.5;
       ctx.strokeRect(x - 22, y - 22, 44, 44);
 
-      ctx.fillStyle = '#4a3005';
-      ctx.fillRect(x - 5, y + 2, 10, 14);
-
-      ctx.fillStyle = '#8b0000';
-      ctx.beginPath();
-      ctx.moveTo(x - 26, y - 22);
-      ctx.lineTo(x, y - 38);
-      ctx.lineTo(x + 26, y - 22);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = '#4a0000';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
       ctx.save();
       ctx.translate(x, y - 30);
-      ctx.rotate(wheelAngle);
+      ctx.rotate(now * 3);
       ctx.fillStyle = '#8b5a2b';
-      for (let i = 0; i < 4; i++) {
-        ctx.rotate(Math.PI / 2);
-        ctx.fillRect(0, -3, 26, 6);
-      }
+      ctx.fillRect(-13, -3, 26, 6);
+      ctx.fillRect(-3, -13, 6, 26);
       ctx.beginPath();
-      ctx.arc(0, 0, 5, 0, Math.PI * 2);
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
       ctx.fillStyle = '#4a2a0a';
       ctx.fill();
       ctx.restore();
 
-      const hpW = 40, hpH = 5;
+      const hpW = 40, hpH = 4;
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(x - hpW/2 - 1, y - 46, hpW + 2, hpH + 2);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(x - hpW/2, y - 45, hpW, hpH);
+      ctx.fillRect(x - hpW/2, y - 46, hpW, hpH + 2);
       ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : '#e74c3c';
       ctx.fillRect(x - hpW/2, y - 45, hpW * hpRatio, hpH);
     }
   }
 
-  function drawCrates() {
-    const now = performance.now() / 1000;
+  function drawCrates(now) {
     for (const cid in crates) {
       const c = crates[cid];
       if (c.hp <= 0) continue;
@@ -1407,37 +1280,28 @@
       let scale = 1;
       if (c.spawnAnim > 0) {
         scale = 1 + Math.sin((1 - c.spawnAnim) * Math.PI) * 0.3;
-        c.spawnAnim -= 0.025;
+        c.spawnAnim -= 0.04;
         if (c.spawnAnim < 0) c.spawnAnim = 0;
       }
-
       let shakeX = 0, shakeY = 0;
       if (c.hitFlash > 0) {
-        shakeX = (Math.random() - 0.5) * 6;
-        shakeY = (Math.random() - 0.5) * 6;
-        c.hitFlash -= 0.08;
+        shakeX = (Math.random() - 0.5) * 4;
+        shakeY = (Math.random() - 0.5) * 4;
+        c.hitFlash -= 0.1;
         if (c.hitFlash < 0) c.hitFlash = 0;
       }
 
       ctx.save();
-      ctx.translate(x + shakeX, y + shakeY);
+      ctx.translate(Math.floor(x + shakeX), Math.floor(y + shakeY));
       ctx.scale(scale, scale);
 
-      ctx.fillStyle = 'rgba(0,0,0,0.2)';
-      ctx.fillRect(-half + 4, -half + 4, CRATE_SIZE, CRATE_SIZE);
-
-      const grad = ctx.createLinearGradient(-half, -half, half, half);
-      grad.addColorStop(0, '#c08040');
-      grad.addColorStop(1, '#7a4a1a');
-      ctx.fillStyle = grad;
+      ctx.fillStyle = '#a86830';
       ctx.fillRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
-
       ctx.strokeStyle = '#4a2a0a';
       ctx.lineWidth = 3;
       ctx.strokeRect(-half, -half, CRATE_SIZE, CRATE_SIZE);
-
       ctx.strokeStyle = 'rgba(60,30,10,0.7)';
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(-half + 5, -half + 5);
       ctx.lineTo(half - 5, half - 5);
@@ -1445,30 +1309,18 @@
       ctx.lineTo(-half + 5, half - 5);
       ctx.stroke();
 
-      const pulse = 0.7 + Math.sin(now * 4) * 0.3;
-      ctx.globalAlpha = pulse;
-      ctx.font = 'bold 22px Arial';
+      ctx.globalAlpha = 0.7 + Math.sin(now * 4) * 0.3;
+      ctx.font = 'bold 20px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      if (c.bonus === 'shield') {
-        ctx.fillStyle = '#00e0ff';
-        ctx.shadowColor = '#00e0ff';
-        ctx.shadowBlur = 12;
-        ctx.fillText('🛡', 0, 0);
-      } else if (c.bonus === 'big_bullets') {
-        ctx.fillStyle = '#ff8800';
-        ctx.shadowColor = '#ff8800';
-        ctx.shadowBlur = 12;
-        ctx.fillText('🔵', 0, 0);
-      }
-      ctx.shadowBlur = 0;
+      if (c.bonus === 'shield') ctx.fillStyle = '#00e0ff';
+      else ctx.fillStyle = '#ff8800';
+      ctx.fillText(c.bonus === 'shield' ? '🛡' : '🔵', 0, 0);
       ctx.globalAlpha = 1;
 
-      const hpW = 44, hpH = 5;
+      const hpW = 44, hpH = 4;
       const hpRatio = Math.max(0, c.hp / (c.max_hp || 3));
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(-hpW/2 - 1, half + 5, hpW + 2, hpH + 2);
-      ctx.fillStyle = '#111';
       ctx.fillRect(-hpW/2, half + 6, hpW, hpH);
       ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : (hpRatio > 0.25 ? '#f39c12' : '#e74c3c');
       ctx.fillRect(-hpW/2, half + 6, hpW * hpRatio, hpH);
@@ -1478,63 +1330,45 @@
   }
 
   function drawBullets() {
-    bullets.forEach(b => {
+    const blen = bullets.length;
+    for (let i = 0; i < blen; i++) {
+      const b = bullets[i];
       const tailX = b.x - b.dx * b.tailLen;
       const tailY = b.y - b.dy * b.tailLen;
-      const grad = ctx.createLinearGradient(tailX, tailY, b.x, b.y);
-      grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(1, b.color);
       ctx.beginPath();
       ctx.moveTo(tailX, tailY);
       ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = b.big ? 12 : 6;
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = b.big ? 10 : 5;
       ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.6;
       ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.radius * 2.3, 0, Math.PI * 2);
-      ctx.fillStyle = b.big ? 'rgba(255,140,0,0.3)' : b.color;
-      ctx.globalAlpha = 0.25;
-      ctx.fill();
       ctx.globalAlpha = 1;
 
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
       ctx.fillStyle = b.big ? '#ffaa33' : (b.pierce ? '#00e0ff' : '#fff');
       ctx.fill();
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.radius * 0.65, 0, Math.PI * 2);
-      ctx.fillStyle = b.big ? '#fff' : b.color;
-      ctx.fill();
-    });
+    }
   }
 
   function drawParticles() {
-    for (let i = particles.length - 1; i >= 0; i--) {
+    const len = particles.length;
+    for (let i = 0; i < len; i++) {
       const p = particles[i];
-      p.x += p.vx; p.y += p.vy;
-      p.vx *= 0.94; p.vy *= 0.94;
-      p.life -= 0.03;
-      if (p.life <= 0) { particles.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
       ctx.fillStyle = p.color;
       ctx.globalAlpha = p.life;
       ctx.fill();
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawWallFragments() {
-    for (let i = wallFragments.length - 1; i >= 0; i--) {
+    const len = wallFragments.length;
+    for (let i = 0; i < len; i++) {
       const f = wallFragments[i];
-      f.x += f.vx; f.y += f.vy;
-      f.vx *= 0.94; f.vy *= 0.94;
-      f.vy += 0.3;
-      f.life -= 0.02;
-      f.rot += f.vrot;
-      if (f.life <= 0) { wallFragments.splice(i, 1); continue; }
       ctx.save();
       ctx.translate(f.x, f.y);
       ctx.rotate(f.rot);
@@ -1542,117 +1376,64 @@
       ctx.globalAlpha = f.life;
       ctx.fillRect(-f.size/2, -f.size/2, f.size, f.size);
       ctx.restore();
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawFloatingTexts() {
-    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    ctx.font = 'bold 18px Arial';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < floatingTexts.length; i++) {
       const t = floatingTexts[i];
-      t.y += t.vy;
-      t.life -= 0.02;
-      if (t.life <= 0) { floatingTexts.splice(i, 1); continue; }
-      ctx.font = 'bold 20px Arial';
-      ctx.textAlign = 'center';
       ctx.strokeStyle = 'rgba(0,0,0,0.6)';
       ctx.lineWidth = 4;
       ctx.strokeText(t.text, t.x, t.y);
       ctx.fillStyle = t.color;
       ctx.globalAlpha = Math.min(1, t.life);
       ctx.fillText(t.text, t.x, t.y);
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawFlashes() {
-    for (let i = hitFlashes.length - 1; i >= 0; i--) {
+    for (let i = 0; i < hitFlashes.length; i++) {
       const f = hitFlashes[i];
-      f.life -= 0.06; f.radius += 6;
-      if (f.life <= 0) { hitFlashes.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
       ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 3;
       ctx.globalAlpha = f.life;
       ctx.stroke();
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawEmotions() {
-    for (let i = activeEmotions.length - 1; i >= 0; i--) {
+    for (let i = 0; i < activeEmotions.length; i++) {
       const e = activeEmotions[i];
       const progress = e.life / EMOTION_LIFE;
       let scale;
-      if (progress > 0.8) {
-        scale = (1 - progress) / 0.2 * 1.3;
-      } else if (progress > 0.2) {
-        scale = 1.3;
-      } else {
-        scale = progress / 0.2 * 1.3;
-      }
-      e.rotation += 0.08;
+      if (progress > 0.8) scale = (1 - progress) / 0.2 * 1.3;
+      else if (progress > 0.2) scale = 1.3;
+      else scale = progress / 0.2 * 1.3;
       const yOffset = -60 * (1 - progress) * 0.5;
       ctx.save();
       ctx.translate(e.x, e.y + yOffset);
       ctx.rotate(e.rotation);
       ctx.scale(scale, scale);
-      ctx.font = '48px Arial';
+      ctx.font = '44px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = 'rgba(0,0,0,0.6)';
-      ctx.shadowBlur = 8;
       ctx.globalAlpha = Math.min(1, progress * 1.5);
       ctx.fillText(e.emoji, 0, 0);
       ctx.restore();
-      e.life -= 0.02;
-      if (e.life <= 0) activeEmotions.splice(i, 1);
     }
-  }
-
-  function render() {
-    // камера следует за игроком
-    if (me) {
-      const targetCamX = me.x - VIEW_W / 2;
-      const targetCamY = me.y - VIEW_H / 2;
-      cameraX += (targetCamX - cameraX) * 0.15;
-      cameraY += (targetCamY - cameraY) * 0.15;
-      cameraX = Math.max(0, Math.min(W - VIEW_W, cameraX));
-      cameraY = Math.max(0, Math.min(H - VIEW_H, cameraY));
-    }
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // масштаб canvas = VIEW_W / canvas.width
-    const scaleX = canvas.width / VIEW_W;
-    const scaleY = canvas.height / VIEW_H;
-    ctx.setTransform(scaleX, 0, 0, scaleY, -cameraX * scaleX, -cameraY * scaleY);
-
-    drawGrid();
-    drawFarms();
-    drawWalls();
-    drawCrates();
-    for (const sid in players) {
-      if (sid === mySid) continue;
-      drawCube(players[sid], false);
-    }
-    if (me) drawCube(me, true);
-    drawBullets();
-    drawParticles();
-    drawWallFragments();
-    drawFlashes();
-    drawFloatingTexts();
-    drawEmotions();
-
-    // мини-карта справа сверху
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    drawMinimap();
+    ctx.globalAlpha = 1;
   }
 
   function drawMinimap() {
-    const size = 110;
-    const pad = 10;
+    const size = 100;
+    const pad = 8;
     const mx = canvas.width - size - pad;
     const my = pad;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -1660,11 +1441,8 @@
     ctx.strokeStyle = '#5a7fd8';
     ctx.lineWidth = 2;
     ctx.strokeRect(mx, my, size, size);
-
     const sx = size / W;
     const sy = size / H;
-
-    // зона
     if (zone.active) {
       ctx.fillStyle = 'rgba(231,76,60,0.35)';
       const zx = mx + zone.left * sx;
@@ -1675,29 +1453,66 @@
       ctx.fillRect(mx, zy + zh, size, my + size - zy - zh);
       ctx.fillRect(mx, zy, zx - mx, zh);
       ctx.fillRect(zx + zw, zy, mx + size - zx - zw, zh);
-      ctx.strokeStyle = '#e74c3c';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(zx, zy, zw, zh);
     }
-
-    // игроки
     for (const sid in players) {
       const p = players[sid];
       if (p.alive === false) continue;
       const px = mx + p.x * sx;
       const py = my + p.y * sy;
       ctx.beginPath();
-      ctx.arc(px, py, sid === mySid ? 4 : 3, 0, Math.PI*2);
+      ctx.arc(px, py, sid === mySid ? 3.5 : 2.5, 0, Math.PI*2);
       ctx.fillStyle = sid === mySid ? '#fff' : p.color;
       ctx.fill();
     }
   }
 
+  function render(now) {
+    if (me) {
+      const targetCamX = me.x - VIEW_W / 2;
+      const targetCamY = me.y - VIEW_H / 2;
+      cameraX += (targetCamX - cameraX) * 0.15;
+      cameraY += (targetCamY - cameraY) * 0.15;
+      cameraX = Math.max(0, Math.min(W - VIEW_W, cameraX));
+      cameraY = Math.max(0, Math.min(H - VIEW_H, cameraY));
+    }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#0f0f16';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const scaleX = canvas.width / VIEW_W;
+    const scaleY = canvas.height / VIEW_H;
+    ctx.setTransform(scaleX, 0, 0, scaleY, -cameraX * scaleX, -cameraY * scaleY);
+
+    drawGrid();
+    drawFarms(now);
+    drawWalls();
+    drawCrates(now);
+    for (const sid in players) {
+      if (sid === mySid) continue;
+      drawCube(players[sid], false, now);
+    }
+    if (me) drawCube(me, true, now);
+    drawBullets();
+    drawParticles();
+    drawWallFragments();
+    drawFlashes();
+    drawFloatingTexts();
+    drawEmotions();
+
+    minimapCounter++;
+    if (minimapCounter >= 3) {
+      minimapCounter = 0;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      drawMinimap();
+    }
+  }
+
   function lighten(color, percent) {
     const num = parseInt(color.replace('#',''), 16);
-    let r = Math.min(255, (num >> 16) + percent);
-    let g = Math.min(255, ((num >> 8) & 0x00FF) + percent);
-    let b = Math.min(255, (num & 0x0000FF) + percent);
+    const r = Math.min(255, (num >> 16) + percent);
+    const g = Math.min(255, ((num >> 8) & 0x00FF) + percent);
+    const b = Math.min(255, (num & 0x0000FF) + percent);
     return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
   }
   function darken(color, percent) { return lighten(color, -percent); }
@@ -1712,8 +1527,8 @@
     updateCD();
     moving = true;
     const dirs = {
-      up:    { x: 0, y: -1 }, down:  { x: 0, y: 1 },
-      left:  { x: -1, y: 0 }, right: { x: 1, y: 0 },
+      up: { x: 0, y: -1 }, down: { x: 0, y: 1 },
+      left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
     };
     const d = dirs[dir];
     me.dir = d;
@@ -1727,13 +1542,12 @@
       if (i > ANIM) {
         me.x = tx; me.y = ty;
         moving = false;
-        render();
         socket.emit('move', { x: me.x, y: me.y, dir: me.dir });
+        startLoop();
         return;
       }
       const t = i / ANIM;
       me.x = sx + dx * t; me.y = sy + dy * t;
-      render();
       requestAnimationFrame(step);
     }
     step();
@@ -1742,7 +1556,6 @@
   document.querySelectorAll('.btn').forEach(btn => {
     if (btn.dataset.dir) btn.addEventListener('click', () => move(btn.dataset.dir));
   });
-
   $('shootBtn').addEventListener('click', () => {
     if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('shot');
@@ -1750,7 +1563,6 @@
     updateCD();
     socket.emit('shoot', {});
   });
-
   $('wallBtn').addEventListener('click', () => {
     if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('light');
@@ -1758,7 +1570,6 @@
     updateCD();
     socket.emit('place_wall', {});
   });
-
   $('farmBtn').addEventListener('click', () => {
     if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('light');
@@ -1766,13 +1577,11 @@
     updateCD();
     socket.emit('place_farm', {});
   });
-
   $('gunBtn').addEventListener('click', () => {
     if (!me || myHp <= 0 || !gameStarted) return;
     haptic('light');
     socket.emit('upgrade_gun', {});
   });
-
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowUp') move('up');
     else if (e.key === 'ArrowDown') move('down');
@@ -1784,110 +1593,158 @@
     else if (e.key === 'f' || e.key === 'F') { emotionBtn.click(); }
   });
 
-  function updateBullets() {
+  function updateEntities() {
+    // пули
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.dx * BULLET_STEP;
       b.y += b.dy * BULLET_STEP;
       b.age += 0.03;
 
-      if (Math.random() < 0.7) {
+      if (particles.length < MAX_PARTICLES && Math.random() < 0.3) {
         particles.push({
           x: b.x, y: b.y,
-          vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2,
-          life: b.big ? 0.8 : 0.5,
-          color: b.big ? '#ffaa33' : b.color,
-          size: b.big ? 3 : 2,
+          vx: (Math.random() - 0.5) * 1.5, vy: (Math.random() - 0.5) * 1.5,
+          life: b.big ? 0.7 : 0.4, color: b.big ? '#ffaa33' : b.color,
+          size: b.big ? 2.5 : 1.5,
         });
       }
 
       let hitSomething = false;
-
       for (const wid in walls) {
         const w = walls[wid];
-        if (Math.abs(w.x - b.x) < 25 && Math.abs(w.y - b.y) < 25) {
-          socket.emit('hit_wall', { wall_id: wid });
-          spawnParticles(b.x, b.y, '#8fa8d8', 8);
+        const dxw = w.x - b.x, dyw = w.y - b.y;
+        if (dxw*dxw + dyw*dyw > 2500) continue;
+        socket.emit('hit_wall', { wall_id: wid });
+        spawnParticles(b.x, b.y, '#8fa8d8', 4);
+        if (!b.pierce) hitSomething = true;
+        break;
+      }
+      if (!hitSomething) {
+        for (const fid in farms) {
+          const f = farms[fid];
+          const dxf = f.x - b.x, dyf = f.y - b.y;
+          if (dxf*dxf + dyf*dyf > 3600) continue;
+          socket.emit('hit_farm', { farm_id: fid });
+          spawnParticles(b.x, b.y, '#d4a017', 4);
           if (!b.pierce) hitSomething = true;
           break;
         }
       }
-
-      if (!hitSomething) {
-        for (const fid in farms) {
-          const f = farms[fid];
-          if (Math.abs(f.x - b.x) < 30 && Math.abs(f.y - b.y) < 30) {
-            socket.emit('hit_farm', { farm_id: fid });
-            spawnParticles(b.x, b.y, '#d4a017', 8);
-            if (!b.pierce) hitSomething = true;
-            break;
-          }
-        }
-      }
-
       if (!hitSomething) {
         for (const cid in crates) {
           const c = crates[cid];
           if (c.hp <= 0) continue;
-          if (Math.abs(c.x - b.x) < 28 && Math.abs(c.y - b.y) < 28) {
-            socket.emit('hit_crate', { crate_id: cid });
-            spawnParticles(b.x, b.y, '#c08040', 10);
-            if (!b.pierce) hitSomething = true;
-            break;
-          }
+          const dxc = c.x - b.x, dyc = c.y - b.y;
+          if (dxc*dxc + dyc*dyc > 2500) continue;
+          socket.emit('hit_crate', { crate_id: cid });
+          spawnParticles(b.x, b.y, '#c08040', 5);
+          if (!b.pierce) hitSomething = true;
+          break;
         }
       }
-
       if (!hitSomething) {
         for (const sid in players) {
           if (sid === b.owner) continue;
           if (b.hit_targets && b.hit_targets.includes(sid)) continue;
           const p = players[sid];
           if (p.alive === false) continue;
-          const dx = p.x - b.x, dy = p.y - b.y;
-          if ((dx * dx + dy * dy) ** 0.5 < HALF + b.radius) {
-            socket.emit('hit', {
-              target_sid: sid,
-              dmg: b.dmg,
-              killer: b.owner,
-            });
+          const dxp = p.x - b.x, dyp = p.y - b.y;
+          if (dxp*dxp + dyp*dyp < (HALF + b.radius) * (HALF + b.radius)) {
+            socket.emit('hit', { target_sid: sid, dmg: b.dmg, killer: b.owner });
             if (!b.hit_targets) b.hit_targets = [];
             b.hit_targets.push(sid);
-            spawnParticles(b.x, b.y, '#ff4040', 10);
-            if (!b.pierce) {
-              hitSomething = true;
-            }
+            spawnParticles(b.x, b.y, '#ff4040', 5);
+            if (!b.pierce) hitSomething = true;
             break;
           }
         }
       }
-
-      if (hitSomething ||
-          b.age >= BULLET_LIFE ||
-          b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
-        for (let k = 0; k < (b.big ? 12 : 6); k++) {
+      if (hitSomething || b.age >= BULLET_LIFE || b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
+        for (let k = 0; k < 3; k++) {
+          if (particles.length >= MAX_PARTICLES) break;
           const angle = Math.random() * Math.PI * 2;
-          const speed = 1 + Math.random() * 3;
+          const speed = 1 + Math.random() * 2;
           particles.push({
             x: b.x, y: b.y,
             vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-            life: 0.6, color: b.big ? '#ffaa33' : b.color,
-            size: b.big ? 4 : 2,
+            life: 0.5, color: b.big ? '#ffaa33' : b.color,
+            size: b.big ? 3 : 1.5,
           });
         }
         bullets.splice(i, 1);
       }
     }
-    renderLoop();
+    // частицы
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.94; p.vy *= 0.94;
+      p.life -= 0.04;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    // фрагменты
+    for (let i = wallFragments.length - 1; i >= 0; i--) {
+      const f = wallFragments[i];
+      f.x += f.vx; f.y += f.vy;
+      f.vx *= 0.94; f.vy *= 0.94;
+      f.vy += 0.3;
+      f.life -= 0.025;
+      f.rot += f.vrot;
+      if (f.life <= 0) wallFragments.splice(i, 1);
+    }
+    // тексты
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+      const t = floatingTexts[i];
+      t.y += t.vy;
+      t.life -= 0.02;
+      if (t.life <= 0) floatingTexts.splice(i, 1);
+    }
+    // вспышки
+    for (let i = hitFlashes.length - 1; i >= 0; i--) {
+      const f = hitFlashes[i];
+      f.life -= 0.08; f.radius += 4;
+      if (f.life <= 0) hitFlashes.splice(i, 1);
+    }
+    // эмоции
+    for (let i = activeEmotions.length - 1; i >= 0; i--) {
+      const e = activeEmotions[i];
+      e.rotation += 0.08;
+      e.life -= 0.02;
+      if (e.life <= 0) activeEmotions.splice(i, 1);
+    }
   }
 
-  function renderLoop() {
-    render();
-    requestAnimationFrame(updateBullets);
+  function startLoop() {
+    if (loopRunning) return;
+    loopRunning = true;
+    lastFrame = performance.now();
+    requestAnimationFrame(loop);
   }
 
-  render();
-  updateBullets();
+  function loop(now) {
+    if (now - lastFrame < FRAME_INTERVAL) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    lastFrame = now;
+
+    updateEntities();
+    render(now / 1000);
+
+    const hasEntities = bullets.length > 0 || particles.length > 0 ||
+      wallFragments.length > 0 || floatingTexts.length > 0 ||
+      hitFlashes.length > 0 || activeEmotions.length > 0;
+
+    if (gameStarted && (hasEntities || moving || zoneFlashTime > 0 || Object.keys(crates).length > 0)) {
+      requestAnimationFrame(loop);
+    } else {
+      loopRunning = false;
+      render(now / 1000);
+    }
+  }
+
+  startLoop();
 </script>
 </body>
 </html>
