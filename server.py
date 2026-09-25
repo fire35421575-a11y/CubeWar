@@ -27,6 +27,7 @@ PASSIVE_INCOME = 1
 KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
+START_COINS = 20
 
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 15, "bullets": 1, "cost": 0,   "pierce": False},
@@ -52,12 +53,10 @@ def get_spawns(count):
     return all_positions[:count]
 
 
-def check_wall_collision(game, x, y, ignore_wall=None):
+def check_wall_collision(game, x, y):
     half = 25
-    for wid, w in game["walls"].items():
+    for w in game["walls"].values():
         if w["hp"] <= 0:
-            continue
-        if wid == ignore_wall:
             continue
         wx, wy = w["x"], w["y"]
         if (x + half > wx - 25 and x - half < wx + 25 and
@@ -107,7 +106,6 @@ def on_create(data):
         "wall_id": 0,
         "farm_id": 0,
         "started": False,
-        "spawn_order": [],
     }
     join_room(code)
     emit('joined', {
@@ -146,7 +144,7 @@ def on_join(data):
         "dir": {"x": 1, "y": 0},
         "hp": 100,
         "max_hp": 100,
-        "coins": 20,
+        "coins": START_COINS,
         "kills": 0,
         "gun_level": 0,
         "color": COLORS[idx % len(COLORS)],
@@ -213,7 +211,7 @@ def on_start_game(data):
     for i, (sid, p) in enumerate(players.items()):
         p["x"], p["y"] = spawns[i]
         p["hp"] = 100
-        p["coins"] = 20
+        p["coins"] = START_COINS
         p["kills"] = 0
         p["gun_level"] = 0
         p["last_passive"] = time.time()
@@ -223,6 +221,7 @@ def on_start_game(data):
         "players": players,
         "walls": game["walls"],
         "farms": game["farms"],
+        "my_color": "your_color_placeholder",  # не используется
     }, to=code)
 
     socketio.start_background_task(passive_loop, code)
@@ -237,12 +236,14 @@ def passive_loop(code):
         if not g.get("started"):
             return
         now = time.time()
+
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
             if now - p.get("last_passive", 0) >= PASSIVE_INCOME_TIME:
                 p["coins"] += PASSIVE_INCOME
                 p["last_passive"] = now
+
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -250,6 +251,7 @@ def passive_loop(code):
                 if p["hp"] < p["max_hp"]:
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
+
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
                 del g["farms"][fid]
@@ -265,8 +267,9 @@ def passive_loop(code):
                         "amount": FARM_INCOME,
                     }, to=code)
                 farm["last_income"] = now
+
         emit('tick_update', {
-            "players": {s: {"coins": p["coins"], "hp": p["hp"]} for s, p in g["players"].items()}
+            "players": {s: {"coins": p["coins"], "hp": p["hp"], "kills": p["kills"]} for s, p in g["players"].items()}
         }, to=code)
 
 
@@ -347,7 +350,7 @@ def on_place_farm(data):
             if p["hp"] <= 0 or not game.get("started"):
                 return
             if p["coins"] < FARM_COST:
-                emit('error_msg', {"text": "Мало очков"})
+                emit('error_msg', {"text": f"Нужно {FARM_COST} очков"})
                 return
             wx = p["x"] - p["dir"]["x"] * 50
             wy = p["y"] - p["dir"]["y"] * 50
@@ -357,10 +360,13 @@ def on_place_farm(data):
                 if other["hp"] <= 0:
                     continue
                 if abs(other["x"] - wx) < 60 and abs(other["y"] - wy) < 60:
+                    emit('error_msg', {"text": "Тут игрок"})
                     return
             if check_wall_collision(game, wx, wy):
+                emit('error_msg', {"text": "Стена мешает"})
                 return
             if check_farm_collision(game, wx, wy):
+                emit('error_msg', {"text": "Тут уже ферма"})
                 return
             game["farm_id"] += 1
             fid = str(game["farm_id"])
