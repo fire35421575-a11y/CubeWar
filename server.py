@@ -47,7 +47,7 @@ PASSIVE_INCOME = 1
 KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
-START_COINS = 20
+START_COINS = 500
 EMOTION_COOLDOWN = 6
 
 CRATE_HP = 3
@@ -178,25 +178,29 @@ def new_player_dict(name, idx):
 
 
 def reset_game():
-    global GAME
-    GAME = {
-        "players": {},
-        "walls": {},
-        "farms": {},
-        "crates": {},
-        "wall_id": 0,
-        "farm_id": 0,
-        "crate_id": 0,
-        "last_crate_spawn": time.time(),
-        "started": False,
-        "start_time": 0,
-        "zone": {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False},
-        "last_zone_tick": 0,
-        "passive_running": False,
-        "next_idx": 0,
-        "countdown_active": False,
-        "countdown_started_at": 0,
-    }
+    """Сброс стейта игры (не игроков)."""
+    GAME["walls"] = {}
+    GAME["farms"] = {}
+    GAME["crates"] = {}
+    GAME["wall_id"] = 0
+    GAME["farm_id"] = 0
+    GAME["crate_id"] = 0
+    GAME["last_crate_spawn"] = time.time()
+    GAME["started"] = False
+    GAME["start_time"] = 0
+    GAME["zone"] = {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False}
+    GAME["last_zone_tick"] = 0
+    GAME["countdown_active"] = False
+    GAME["countdown_started_at"] = 0
+    # сбрасываем игроков
+    for p in GAME["players"].values():
+        p["hp"] = 100
+        p["coins"] = START_COINS
+        p["kills"] = 0
+        p["gun_level"] = 0
+        p["shield_until"] = 0
+        p["big_bullets_until"] = 0
+        p["alive"] = True
 
 
 def broadcast_player_list():
@@ -248,7 +252,6 @@ def on_join_server(data):
         return
 
     if GAME["started"]:
-        # если игра идёт, но все мертвы — сбросим
         alive = [s for s, p in GAME["players"].items() if p["hp"] > 0]
         if len(alive) == 0 and len(GAME["players"]) == 0:
             reset_game()
@@ -277,62 +280,24 @@ def on_join_server(data):
     })
 
     broadcast_player_list()
-    check_countdown()
-
-
-@socketio.on('toggle_ready')
-def on_toggle_ready(data):
-    sid = request.sid
-    if sid in GAME["players"]:
-        p = GAME["players"][sid]
-        p["ready"] = not p.get("ready", False)
-        broadcast_player_list()
 
 
 def check_countdown():
+    """Запуск таймера если нужно."""
     if GAME["started"]:
         return
     if GAME["countdown_active"]:
-        return  # уже идёт таймер
+        return
     if len(GAME["players"]) < MIN_PLAYERS:
         return
 
     GAME["countdown_active"] = True
     GAME["countdown_started_at"] = time.time()
 
-    # если набралось максимум — таймер 5 секунд
     if len(GAME["players"]) >= MAX_PLAYERS:
         GAME["countdown_started_at"] = time.time() - (COUNTDOWN_SECONDS - 5)
 
     broadcast_player_list()
-    socketio.start_background_task(countdown_loop)
-
-
-def countdown_loop():
-    while GAME.get("countdown_active"):
-        socketio.sleep(1)
-        if not GAME["countdown_active"]:
-            return
-        if GAME["started"]:
-            return
-        if len(GAME["players"]) < MIN_PLAYERS:
-            GAME["countdown_active"] = False
-            GAME["countdown_started_at"] = 0
-            broadcast_player_list()
-            return
-
-        elapsed = time.time() - GAME["countdown_started_at"]
-        left = COUNTDOWN_SECONDS - int(elapsed)
-
-        if left <= 0:
-            GAME["countdown_active"] = False
-            try:
-                start_game()
-            except Exception as e:
-                print("START_GAME ERROR:", e)
-            return
-
-        broadcast_player_list()
 
 
 def start_game():
@@ -391,10 +356,6 @@ def start_game():
         "world_h": H,
     }, room=SERVER_CODE, namespace='/')
 
-    if not GAME.get("passive_running"):
-        GAME["passive_running"] = True
-        socketio.start_background_task(passive_loop)
-
 
 def spawn_crate():
     x, y = random_crate_pos()
@@ -418,14 +379,52 @@ def spawn_crate():
 
 
 def passive_loop():
+    """ЕДИНЫЙ цикл — таймер, игра, всё здесь."""
     tick_count = 0
     while True:
         socketio.sleep(1)
-        if not GAME.get("started"):
+        tick_count += 1
+
+        # === 1. Если нет игроков — спим и ждём ===
+        if len(GAME["players"]) == 0:
+            GAME["countdown_active"] = False
+            GAME["started"] = False
+            GAME["passive_running"] = False
             return
+
+        # === 2. Фаза ожидания (таймер) ===
+        if not GAME["started"]:
+            if len(GAME["players"]) >= MIN_PLAYERS:
+                if not GAME["countdown_active"]:
+                    GAME["countdown_active"] = True
+                    GAME["countdown_started_at"] = time.time()
+                    # при 6 игроках — быстрый старт
+                    if len(GAME["players"]) >= MAX_PLAYERS:
+                        GAME["countdown_started_at"] = time.time() - (COUNTDOWN_SECONDS - 5)
+                    broadcast_player_list()
+                else:
+                    # таймер идёт
+                    elapsed = time.time() - GAME["countdown_started_at"]
+                    left = COUNTDOWN_SECONDS - int(elapsed)
+                    if left <= 0:
+                        GAME["countdown_active"] = False
+                        try:
+                            start_game()
+                        except Exception as e:
+                            print("START_GAME ERROR:", e)
+                    else:
+                        broadcast_player_list()
+            else:
+                # игроков мало — сбрасываем таймер
+                if GAME["countdown_active"]:
+                    GAME["countdown_active"] = False
+                    GAME["countdown_started_at"] = 0
+                    broadcast_player_list()
+            continue
+
+        # === 3. Игра идёт ===
         now = time.time()
         elapsed = now - GAME.get("start_time", now)
-        tick_count += 1
 
         zone = GAME["zone"]
         if elapsed >= ZONE_START_TIME:
@@ -568,6 +567,12 @@ def passive_loop():
                 },
                 "elapsed": elapsed,
             }, room=SERVER_CODE, namespace='/')
+
+
+def start_passive_if_needed():
+    if not GAME.get("passive_running"):
+        GAME["passive_running"] = True
+        socketio.start_background_task(passive_loop)
 
 
 def check_win():
@@ -889,10 +894,25 @@ def on_disconnect():
             GAME["countdown_active"] = False
             GAME["countdown_started_at"] = 0
             broadcast_player_list()
-        # если все вышли — сброс
         if len(GAME["players"]) == 0:
             reset_game()
+            GAME["passive_running"] = False
             socketio.server.emit('server_reset', {}, room=SERVER_CODE, namespace='/')
+
+
+# === ЗАПУСК ЕДИНОГО ЦИКЛА ПРИ СТАРТЕ СЕРВЕРА ===
+def start_passive_on_boot():
+    """Запускаем единый цикл сразу при старте сервера."""
+    socketio.start_background_task(passive_loop)
+
+
+# Запускаем через 1 секунду после старта
+import threading
+def delayed_start():
+    time.sleep(2)
+    start_passive_if_needed()
+
+threading.Thread(target=delayed_start, daemon=True).start()
 
 
 if __name__ == '__main__':
