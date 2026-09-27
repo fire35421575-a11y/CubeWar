@@ -36,16 +36,8 @@
     letter-spacing: 1px; text-transform: uppercase;
   }
   .big-btn:active { transform: scale(0.97); }
-  .big-btn.secondary { background: #1c1c26; color: #9bb8ff; border: 1px solid #2e2e3c; }
   .big-btn:disabled { background: #1c1c26; color: #555; cursor: default; text-transform: none; letter-spacing: 0; }
   .big-btn.green { background: linear-gradient(180deg, #2ecc71, #27ae60); }
-  .big-btn.ready { background: linear-gradient(180deg, #27ae60, #1e8449); }
-  .room-code {
-    background: #1c1c26; border: 2px dashed #5a7fd8; color: #9bb8ff;
-    padding: 16px; border-radius: 10px; font-size: 28px; font-weight: 800;
-    letter-spacing: 8px; margin: 10px 0; user-select: all; text-align: center;
-    width: 100%; font-family: 'Courier New', monospace;
-  }
   .hint { font-size: 12px; color: #666680; text-align: center; margin: 6px 0; line-height: 1.5; }
   .status { font-size: 12px; color: #666680; margin: 4px 0; text-align: center; }
   canvas {
@@ -93,14 +85,10 @@
   }
   .btn .cd-num {
     position: absolute;
-    bottom: 4px;
-    right: 6px;
-    font-size: 10px;
-    font-weight: 800;
-    color: #fff;
+    bottom: 4px; right: 6px;
+    font-size: 10px; font-weight: 800; color: #fff;
     text-shadow: 0 1px 2px #000;
-    pointer-events: none;
-    opacity: 0;
+    pointer-events: none; opacity: 0;
   }
   .btn.recharging .cd-num { opacity: 1; }
 
@@ -113,8 +101,30 @@
     font-weight: 700; color: #fff; letter-spacing: 0.5px;
     display: flex; align-items: center; gap: 6px;
   }
-  .player-chip .check { font-size: 12px; opacity: 0.5; }
-  .player-chip.ready .check { opacity: 1; color: #2ecc71; }
+
+  .waiting-box {
+    background: #1c1c26;
+    border: 1px solid #2e2e3c;
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    text-align: center;
+    margin: 10px 0;
+  }
+  .waiting-count {
+    font-size: 42px;
+    font-weight: 900;
+    color: #9bb8ff;
+    letter-spacing: 4px;
+    margin: 6px 0;
+  }
+  .waiting-timer {
+    font-size: 60px;
+    font-weight: 900;
+    color: #2ecc71;
+    margin: 6px 0;
+    text-shadow: 0 0 30px rgba(46,204,113,0.6);
+  }
 
   .hud {
     display: flex; gap: 12px; margin: 8px 0; font-size: 13px;
@@ -157,17 +167,13 @@
 
   #countdown {
     position: fixed;
-    top: 50%;
-    left: 50%;
+    top: 50%; left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 180px;
-    font-weight: 900;
+    font-size: 180px; font-weight: 900;
     color: #fff;
     text-shadow: 0 0 40px #5a7fd8, 0 0 80px #4a6fd8, 0 0 120px #3a5fcd;
-    z-index: 900;
-    pointer-events: none;
-    opacity: 0;
-    letter-spacing: 8px;
+    z-index: 900; pointer-events: none;
+    opacity: 0; letter-spacing: 8px;
     font-family: 'Arial Black', Arial, sans-serif;
   }
   #countdown.show {
@@ -186,20 +192,12 @@
   }
 
   #emotionBtn {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
+    position: fixed; bottom: 24px; right: 24px;
+    width: 60px; height: 60px; border-radius: 50%;
     background: linear-gradient(135deg, #4a6fd8, #3a5fcd);
     border: 2px solid #5a7fd8;
-    color: #fff;
-    font-size: 28px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    color: #fff; font-size: 28px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
     box-shadow: 0 6px 24px rgba(74,111,216,0.5);
     z-index: 500;
     transition: transform 0.2s, box-shadow 0.2s;
@@ -209,72 +207,48 @@
   #emotionBtn.hidden { display: none; }
 
   #emotionPanel {
-    position: fixed;
-    bottom: 96px;
-    right: 24px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    padding: 12px;
+    position: fixed; bottom: 96px; right: 24px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px; padding: 12px;
     background: rgba(28,28,38,0.95);
     border: 1px solid #2e2e3c;
     border-radius: 16px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.6);
-    z-index: 499;
-    opacity: 0;
+    z-index: 499; opacity: 0;
     transform: translateY(20px) scale(0.8);
     pointer-events: none;
     transition: opacity 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
                 transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   #emotionPanel.show {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    opacity: 1; transform: translateY(0) scale(1);
     pointer-events: auto;
   }
   .emotion-option {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    background: #252533;
-    border: 1px solid #2e2e3c;
-    font-size: 26px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 48px; height: 48px; border-radius: 12px;
+    background: #252533; border: 1px solid #2e2e3c;
+    font-size: 26px; display: flex;
+    align-items: center; justify-content: center;
     cursor: pointer;
     transition: transform 0.1s, background 0.1s;
     user-select: none;
   }
   .emotion-option:active {
-    transform: scale(0.85);
-    background: #3a5fcd;
+    transform: scale(0.85); background: #3a5fcd;
   }
 
   #emotionCooldownBar {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
+    position: fixed; bottom: 24px; right: 24px;
+    width: 60px; height: 60px; border-radius: 50%;
     background: conic-gradient(#e74c3c 0deg, rgba(231,76,60,0.2) 0deg);
-    pointer-events: none;
-    z-index: 501;
-    display: none;
+    pointer-events: none; z-index: 501; display: none;
   }
   #emotionCooldownBar.show { display: block; }
   #emotionCooldownText {
-    position: fixed;
-    bottom: 42px;
-    right: 42px;
-    font-size: 14px;
-    font-weight: 800;
-    color: #fff;
+    position: fixed; bottom: 42px; right: 42px;
+    font-size: 14px; font-weight: 800; color: #fff;
     text-shadow: 0 2px 4px rgba(0,0,0,0.8);
-    z-index: 502;
-    pointer-events: none;
-    display: none;
+    z-index: 502; pointer-events: none; display: none;
   }
   #emotionCooldownText.show { display: block; }
 
@@ -296,28 +270,19 @@
     80% { transform: translateX(5px); }
   }
 
-  #menuScreen h1 {
-    animation: titleSlam 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  }
+  #menuScreen h1 { animation: titleSlam 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
   #menuScreen .hint { animation: fadeInUp 0.5s 0.6s both; }
   #menuScreen #nameInput { animation: fadeInUp 0.5s 0.75s both; }
-  #menuScreen #createBtn { animation: fadeInUp 0.5s 0.9s both; }
-  #menuScreen #codeInput { animation: fadeInUp 0.5s 1.05s both; }
-  #menuScreen #joinBtn { animation: fadeInUp 0.5s 1.2s both; }
-  #menuScreen #menuStatus { animation: fadeInUp 0.5s 1.35s both; }
+  #menuScreen #playBtn { animation: fadeInUp 0.5s 0.9s both; }
+  #menuScreen #menuStatus { animation: fadeInUp 0.5s 1.05s both; }
 
   #bgFx {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 1;
-    overflow: hidden;
+    position: fixed; inset: 0;
+    pointer-events: none; z-index: 1; overflow: hidden;
   }
   .bg-spark {
     position: absolute;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
+    width: 6px; height: 6px; border-radius: 50%;
     background: #ffcc44;
     box-shadow: 0 0 12px #ff8800, 0 0 24px #ff4400;
     pointer-events: none;
@@ -337,23 +302,25 @@
 <h1 id="mainTitle">CUBE WAR</h1>
 
 <div class="screen active" id="menuScreen">
-  <div class="hint">Введи имя и создай комнату — или присоединись по коду.</div>
+  <div class="hint">Введи имя и играй. Заходи один или с друзьями.</div>
   <input type="text" id="nameInput" placeholder="Твоё имя" maxlength="12">
-  <button class="big-btn" id="createBtn">Создать комнату</button>
-  <input type="text" id="codeInput" placeholder="Код комнаты" maxlength="6"
-         style="text-transform: uppercase; font-family: 'Courier New', monospace; letter-spacing: 4px;">
-  <button class="big-btn secondary" id="joinBtn">Присоединиться</button>
+  <button class="big-btn" id="playBtn">▶ ИГРАТЬ</button>
   <div class="status" id="menuStatus"></div>
 </div>
 
-<div class="screen" id="lobbyScreen">
-  <div class="hint">Код комнаты:</div>
-  <div class="room-code" id="roomCode">------</div>
-  <div class="hint" id="lobbyHint">Скинь код друзьям. Каждый жмёт «✅ Готов». Хост — «▶️ Начать».</div>
-  <button class="big-btn ready" id="readyBtn">✅ Я готов</button>
-  <button class="big-btn green" id="startBtn" disabled>▶️ Начать игру</button>
-  <div class="players-bar" id="lobbyPlayers"></div>
-  <div class="status" id="lobbyStatus"></div>
+<div class="screen" id="waitingScreen">
+  <div class="hint">Ждём игроков...</div>
+  <div class="waiting-box">
+    <div class="hint">Игроков на сервере:</div>
+    <div class="waiting-count" id="waitCount">0 / 6</div>
+    <div class="players-bar" id="waitPlayers"></div>
+    <div id="waitTimerWrap" style="display:none;">
+      <div class="hint">До старта:</div>
+      <div class="waiting-timer" id="waitTimer">20</div>
+    </div>
+    <div class="hint" id="waitHint">Нужно минимум 2 игрока</div>
+  </div>
+  <div class="status" id="waitStatus"></div>
 </div>
 
 <div class="screen" id="gameScreen">
@@ -379,7 +346,7 @@
   </div>
 </div>
 
-<button id="emotionBtn">💬</button>
+<button id="emotionBtn" class="hidden">💬</button>
 <div id="emotionPanel">
   <div class="emotion-option" data-emoji="😂">😂</div>
   <div class="emotion-option" data-emoji="😡">😡</div>
@@ -429,7 +396,6 @@
   let socket = null;
   let mySid = null;
   let myColor = "#1a1a1a";
-  let roomCode = "";
   let players = {};
   let me = null;
   let myCoins = 500;
@@ -461,12 +427,12 @@
   let zoneFlashTime = 0;
 
   const $ = id => document.getElementById(id);
-  const menuScreen = $('menuScreen'), lobbyScreen = $('lobbyScreen'), gameScreen = $('gameScreen');
-  const nameInput = $('nameInput'), codeInput = $('codeInput');
-  const createBtn = $('createBtn'), joinBtn = $('joinBtn'), menuStatus = $('menuStatus');
-  const roomCodeEl = $('roomCode'), lobbyPlayers = $('lobbyPlayers');
-  const lobbyStatus = $('lobbyStatus');
-  const readyBtn = $('readyBtn'), startBtn = $('startBtn');
+  const menuScreen = $('menuScreen'), waitingScreen = $('waitingScreen'), gameScreen = $('gameScreen');
+  const nameInput = $('nameInput');
+  const playBtn = $('playBtn'), menuStatus = $('menuStatus');
+  const waitCount = $('waitCount'), waitPlayers = $('waitPlayers');
+  const waitTimer = $('waitTimer'), waitTimerWrap = $('waitTimerWrap');
+  const waitHint = $('waitHint'), waitStatus = $('waitStatus');
   const canvas = $('canvas'), ctx = canvas.getContext('2d');
   const hpView = $('hpView'), coinsView = $('coinsView'), killsView = $('killsView');
   const cdView = $('cdView'), hpWrap = $('hpWrap');
@@ -486,7 +452,8 @@
     const name = u.first_name || u.username || '';
     if (name) nameInput.value = name.slice(0, 12);
   }
-    function createBgExplosion() {
+
+  function createBgExplosion() {
     const cx = window.innerWidth / 2;
     const cy = window.innerHeight / 2;
     const count = 90;
@@ -519,14 +486,6 @@
     emotionBtn.classList.toggle('hidden', id !== 'gameScreen');
     if (id !== 'gameScreen') {
       emotionPanel.classList.remove('show');
-    }
-    if (id === 'menuScreen') {
-      const h = menuScreen.querySelector('h1');
-      if (h) {
-        h.style.animation = 'none';
-        void h.offsetWidth;
-        h.style.animation = '';
-      }
     }
   }
 
@@ -644,53 +603,55 @@
 
     socket.on('joined', (data) => {
       mySid = socket.id;
-      roomCode = data.code;
       myColor = data.my_color;
-      players = data.players;
-      walls = data.walls || {};
-      farms = data.farms || {};
-      crates = data.crates || {};
       GUN_LEVELS = data.gun_levels || [];
       FARM_COST = data.farm_cost || 20;
       WALL_COST = data.wall_cost || 10;
       COOLDOWN = data.cooldown || 0.5;
       if (data.world_w) W = data.world_w;
       if (data.world_h) H = data.world_h;
-      me = players[mySid];
-      if (me) {
-        myCoins = me.coins;
-        myHp = me.hp;
-        myKills = me.kills;
-        myShieldUntil = me.shield_until || 0;
-        myBigBulletsUntil = me.big_bullets_until || 0;
-      } else {
-        console.warn('me не найден! mySid:', mySid, 'keys:', Object.keys(players));
-      }
-      roomCodeEl.textContent = roomCode;
-      showScreen('lobbyScreen');
-      updateLobby();
+      showScreen('waitingScreen');
     });
 
-    socket.on('player_joined', (data) => {
-      players[data.sid] = data.player;
-      updateLobby();
+    socket.on('server_update', (data) => {
+      players = data.players || {};
+      const list = Object.values(players);
+      waitCount.textContent = `${list.length} / ${data.max_players || 6}`;
+
+      waitPlayers.innerHTML = '';
+      list.forEach(p => {
+        const chip = document.createElement('div');
+        chip.className = 'player-chip';
+        chip.style.background = p.color;
+        chip.textContent = p.name;
+        waitPlayers.appendChild(chip);
+      });
+
+      if (data.countdown_active) {
+        waitTimerWrap.style.display = 'block';
+        waitTimer.textContent = data.countdown_left;
+        waitHint.textContent = 'Игра начнётся через...';
+      } else {
+        waitTimerWrap.style.display = 'none';
+        if (list.length < 2) {
+          waitHint.textContent = 'Нужно минимум 2 игрока. Ждём...';
+        } else {
+          waitHint.textContent = 'Приготовься...';
+        }
+      }
+
+      if (data.started) {
+        // Уже стартовало — ждём game_started
+      }
     });
 
     socket.on('player_left', (data) => {
-      delete players[data.sid];
-      updateLobby();
-      render();
-    });
-
-    socket.on('ready_changed', (data) => {
-      const p = players[data.sid];
-      if (p) p.ready = data.ready;
-      updateLobby();
+      // server_update придёт
     });
 
     socket.on('game_started', (data) => {
       mySid = socket.id;
-      players = data.players;
+      players = data.players || {};
       walls = data.walls || {};
       farms = data.farms || {};
       crates = data.crates || {};
@@ -698,13 +659,13 @@
       if (data.world_h) H = data.world_h;
       me = players[mySid];
       if (me) {
-        myCoins = me.coins;
-        myHp = me.hp;
-        myKills = me.kills;
+        myCoins = me.coins || 500;
+        myHp = me.hp || 100;
+        myKills = me.kills || 0;
         myShieldUntil = me.shield_until || 0;
         myBigBulletsUntil = me.big_bullets_until || 0;
       } else {
-        console.warn('me не найден в game_started! mySid:', mySid);
+        console.warn('me не найден! mySid:', mySid);
       }
       gameStarted = true;
       updateHUD();
@@ -712,6 +673,19 @@
       if (me) { cameraX = me.x - VIEW_W/2; cameraY = me.y - VIEW_H/2; }
       render();
       startCountdown();
+    });
+
+    socket.on('server_reset', () => {
+      gameStarted = false;
+      bullets = [];
+      particles = [];
+      wallFragments = [];
+      floatingTexts = [];
+      hitFlashes = [];
+      activeEmotions = [];
+      zone = { active: false, left: 0, top: 0, right: 0, bottom: 0, warn: false };
+      gameElapsed = 0;
+      showScreen('waitingScreen');
     });
 
     socket.on('tick_update', (data) => {
@@ -750,16 +724,10 @@
       if (typeof data.elapsed === 'number') gameElapsed = data.elapsed;
     });
 
-    socket.on('zone_warning', () => {
-      zoneFlashTime = 1.0;
-      haptic('explosion');
-    });
-
+    socket.on('zone_warning', () => { zoneFlashTime = 1.0; haptic('explosion'); });
     socket.on('zone_update', (data) => {
-      zone.left = data.left;
-      zone.top = data.top;
-      zone.right = data.right;
-      zone.bottom = data.bottom;
+      zone.left = data.left; zone.top = data.top;
+      zone.right = data.right; zone.bottom = data.bottom;
       zone.active = true;
     });
 
@@ -783,10 +751,8 @@
           x: data.x, y: data.y,
           dx: Math.cos(a), dy: Math.sin(a),
           color: data.color, owner: data.sid,
-          age: 0,
-          dmg: data.dmg || 5,
-          pierce: data.pierce,
-          big: isBig,
+          age: 0, dmg: data.dmg || 5,
+          pierce: data.pierce, big: isBig,
           radius: isBig ? 12 : 6,
           tailLen: isBig ? 36 : 22,
           hit_targets: [],
@@ -833,12 +799,6 @@
         spawnFlash(p.x, p.y);
         render();
       }
-      if (data.sid === mySid) {
-        setTimeout(() => {
-          showScreen('menuScreen');
-          winBanner.classList.remove('show');
-        }, 3000);
-      }
     });
 
     socket.on('wall_placed', (data) => {
@@ -878,9 +838,7 @@
       spawnParticles(data.x, data.y, '#f1c40f', 15);
       floatingTexts.push({
         x: data.x, y: data.y - 40,
-        text: '🏭',
-        color: '#f1c40f',
-        life: 1.5, vy: -1.5,
+        text: '🏭', color: '#f1c40f', life: 1.5, vy: -1.5,
       });
       render();
       updateHUD();
@@ -912,8 +870,7 @@
       floatingTexts.push({
         x: data.x, y: data.y - 30,
         text: '+' + (data.amount || 1),
-        color: '#f1c40f',
-        life: 1.5, vy: -1.2,
+        color: '#f1c40f', life: 1.5, vy: -1.2,
       });
       if (data.owner === mySid) {
         myCoins += (data.amount || 1);
@@ -927,8 +884,7 @@
         x: data.x, y: data.y,
         hp: data.hp, max_hp: data.max_hp || 3,
         bonus: data.bonus,
-        spawnAnim: 1.0,
-        hitFlash: 0,
+        spawnAnim: 1.0, hitFlash: 0,
       };
       for (let i = 0; i < 20; i++) {
         const angle = Math.random() * Math.PI * 2;
@@ -966,19 +922,9 @@
       }
       spawnFlash(data.x, data.y);
       if (data.bonus === 'shield') {
-        floatingTexts.push({
-          x: data.x, y: data.y - 30,
-          text: '🛡 ЩИТ!',
-          color: '#00e0ff',
-          life: 2, vy: -1.0,
-        });
+        floatingTexts.push({ x: data.x, y: data.y - 30, text: '🛡 ЩИТ!', color: '#00e0ff', life: 2, vy: -1.0 });
       } else if (data.bonus === 'big_bullets') {
-        floatingTexts.push({
-          x: data.x, y: data.y - 30,
-          text: '🔵 БОЛЬШИЕ ПУЛИ!',
-          color: '#ff8800',
-          life: 2, vy: -1.0,
-        });
+        floatingTexts.push({ x: data.x, y: data.y - 30, text: '🔵 БОЛЬШИЕ ПУЛИ!', color: '#ff8800', life: 2, vy: -1.0 });
       }
       if (data.player_sid === mySid) haptic('bonus');
       render();
@@ -1024,12 +970,12 @@
       showWinBanner('🏆 ' + data.winner + '<small>побеждает!</small>');
       setTimeout(() => {
         winBanner.classList.remove('show');
-        showScreen('menuScreen');
       }, 4000);
     });
 
     socket.on('error_msg', (data) => {
       menuStatus.textContent = data.text;
+      waitStatus.textContent = data.text;
       if (gameStarted && me) {
         floatingTexts.push({
           x: me.x, y: me.y - 40,
@@ -1050,31 +996,6 @@
     });
   }
 
-  function updateLobby() {
-    lobbyPlayers.innerHTML = '';
-    const list = Object.values(players);
-    list.forEach(p => {
-      const chip = document.createElement('div');
-      chip.className = 'player-chip' + (p.ready ? ' ready' : '');
-      chip.style.background = p.color;
-      chip.innerHTML = `${p.name} <span class="check">${p.ready ? '✅' : '⏳'}</span>`;
-      lobbyPlayers.appendChild(chip);
-    });
-    lobbyStatus.textContent = `Игроков: ${list.length} / 8`;
-    const allReady = list.length >= 1 && (list.length === 1 || list.every(p => p.ready));
-    startBtn.disabled = !allReady;
-    if (!allReady) {
-      const notReady = list.filter(p => !p.ready).map(p => p.name);
-      if (list.length < 2) startBtn.textContent = '▶️ Начать (тест)';
-      else startBtn.textContent = 'Ждём: ' + notReady.join(', ');
-    } else {
-      startBtn.textContent = '▶️ Начать игру';
-    }
-    if (players[mySid]) {
-      readyBtn.textContent = players[mySid].ready ? '❌ Отменить готовность' : '✅ Я готов';
-    }
-  }
-
   function updateHUD() {
     hpView.textContent = myHp;
     if (myHp <= 30) hpWrap.classList.add('low');
@@ -1083,24 +1004,13 @@
     killsView.textContent = myKills;
   }
 
-  createBtn.addEventListener('click', () => {
+  playBtn.addEventListener('click', () => {
     const name = nameInput.value.trim();
     if (!name) { menuStatus.textContent = 'Введи имя'; return; }
     if (!socket) connect();
-    setTimeout(() => socket.emit('create_game', { name }), 300);
+    setTimeout(() => socket.emit('join_server', { name }), 300);
   });
 
-  joinBtn.addEventListener('click', () => {
-    const name = nameInput.value.trim();
-    const code = codeInput.value.trim().toUpperCase();
-    if (!name) { menuStatus.textContent = 'Введи имя'; return; }
-    if (!code) { menuStatus.textContent = 'Введи код'; return; }
-    if (!socket) connect();
-    setTimeout(() => socket.emit('join_game', { name, code }), 300);
-  });
-
-  readyBtn.addEventListener('click', () => { if (socket) socket.emit('toggle_ready', {}); });
-  startBtn.addEventListener('click', () => { if (socket) socket.emit('start_game', { code: roomCode }); });
   emotionBtn.addEventListener('click', () => { emotionPanel.classList.toggle('show'); haptic('light'); });
 
   emotionPanel.querySelectorAll('.emotion-option').forEach(opt => {
@@ -1139,11 +1049,7 @@
       });
     }
   }
-
-  function spawnFlash(x, y) {
-    hitFlashes.push({ x, y, life: 1, radius: 10 });
-  }
-
+  function spawnFlash(x, y) { hitFlashes.push({ x, y, life: 1, radius: 10 }); }
   function spawnMuzzleFlash(x, y, color, dir, big) {
     const count = big ? 12 : 7;
     const baseAngle = Math.atan2(dir.y, dir.x);
@@ -1151,30 +1057,24 @@
       const angle = baseAngle + (Math.random() - 0.5) * 0.8;
       const speed = 3 + Math.random() * 5;
       particles.push({
-        x, y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 0.7, color,
-        size: big ? 4 + Math.random() * 3 : 2 + Math.random() * 3,
+        x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        life: 0.7, color, size: big ? 4 + Math.random() * 3 : 2 + Math.random() * 3,
       });
     }
     hitFlashes.push({ x, y, life: 0.5, radius: 6 });
   }
 
+  // === РЕНДЕР ===
   function drawGrid() {
     const startX = Math.max(0, Math.floor(cameraX / 50) * 50);
     const startY = Math.max(0, Math.floor(cameraY / 50) * 50);
     const endX = Math.min(W, cameraX + VIEW_W + 50);
     const endY = Math.min(H, cameraY + VIEW_H + 50);
-
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
-
     if (zone.active) {
-      const zLeft = zone.left;
-      const zTop = zone.top;
-      const zRight = W - zone.right;
-      const zBottom = H - zone.bottom;
+      const zLeft = zone.left, zTop = zone.top;
+      const zRight = W - zone.right, zBottom = H - zone.bottom;
       ctx.fillStyle = 'rgba(231,76,60,0.35)';
       if (zTop > cameraY) ctx.fillRect(cameraX, cameraY, VIEW_W, Math.max(0, zTop - cameraY));
       if (zBottom < cameraY + VIEW_H) ctx.fillRect(cameraX, zBottom, VIEW_W, Math.max(0, cameraY + VIEW_H - zBottom));
@@ -1194,7 +1094,6 @@
       ctx.strokeRect(zLeft, zTop, zRight - zLeft, zBottom - zTop);
       ctx.setLineDash([]);
     }
-
     ctx.strokeStyle = '#e8e8ec';
     ctx.lineWidth = 1;
     for (let x = startX; x <= endX; x += 50) {
@@ -1209,7 +1108,6 @@
       ctx.lineTo(cameraX + VIEW_W, y);
       ctx.stroke();
     }
-
     if (zoneFlashTime > 0) {
       ctx.fillStyle = `rgba(255,0,0,${zoneFlashTime * 0.5})`;
       ctx.fillRect(cameraX, cameraY, VIEW_W, VIEW_H);
@@ -1221,24 +1119,19 @@
     if (p.alive === false) return;
     const now = Date.now() / 1000;
     const shielded = (p.shield_until || 0) > now;
-
     if (p.x < cameraX - 100 || p.x > cameraX + VIEW_W + 100 ||
         p.y < cameraY - 100 || p.y > cameraY + VIEW_H + 100) return;
-
     const x = p.x - HALF, y = p.y - HALF;
     ctx.fillStyle = 'rgba(0,0,0,0.2)';
     ctx.fillRect(x + 4, y + 4, CUBE, CUBE);
-
     const grad = ctx.createLinearGradient(x, y, x + CUBE, y + CUBE);
     grad.addColorStop(0, lighten(p.color, 20));
     grad.addColorStop(1, darken(p.color, 30));
     ctx.fillStyle = grad;
     ctx.fillRect(x, y, CUBE, CUBE);
-
     ctx.strokeStyle = isMe ? '#000' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = isMe ? 3 : 2;
     ctx.strokeRect(x, y, CUBE, CUBE);
-
     const lvl = p.gun_level || 0;
     const barrelLen = 22 + lvl * 5;
     const barrelW = 10 + lvl * 2;
@@ -1256,7 +1149,6 @@
       ctx.fillRect(10, barrelW / 2 + 2, barrelLen - 4, 4);
     }
     ctx.restore();
-
     if (shielded) {
       const t = now * 4;
       const pulse = 1 + Math.sin(t) * 0.08;
@@ -1272,14 +1164,7 @@
       ctx.strokeStyle = '#00e0ff';
       ctx.lineWidth = 2.5;
       ctx.stroke();
-      const ringR = (CUBE / 2 + 18) + ((t * 20) % 20);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(0,224,255,${1 - ((t * 20) % 20) / 20})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
     }
-
     const hpW = 54, hpH = 7;
     const curHp = isMe ? myHp : p.hp;
     const ratio = Math.max(0, (curHp || 100) / 100);
@@ -1289,7 +1174,6 @@
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW, hpH);
     ctx.fillStyle = ratio > 0.6 ? '#2ecc71' : (ratio > 0.3 ? '#f39c12' : '#e74c3c');
     ctx.fillRect(p.x - hpW / 2, p.y - HALF - 20, hpW * ratio, hpH);
-
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     ctx.strokeStyle = '#fff';
@@ -1590,14 +1474,11 @@
       cameraX = Math.max(0, Math.min(W - VIEW_W, cameraX));
       cameraY = Math.max(0, Math.min(H - VIEW_H, cameraY));
     }
-
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     const scaleX = canvas.width / VIEW_W;
     const scaleY = canvas.height / VIEW_H;
     ctx.setTransform(scaleX, 0, 0, scaleY, -cameraX * scaleX, -cameraY * scaleY);
-
     drawGrid();
     drawFarms();
     drawWalls();
@@ -1617,9 +1498,9 @@
 
   function lighten(color, percent) {
     const num = parseInt(color.replace('#',''), 16);
-    let r = Math.min(255, (num >> 16) + percent);
-    let g = Math.min(255, ((num >> 8) & 0x00FF) + percent);
-    let b = Math.min(255, (num & 0x0000FF) + percent);
+    const r = Math.min(255, (num >> 16) + percent);
+    const g = Math.min(255, ((num >> 8) & 0x00FF) + percent);
+    const b = Math.min(255, (num & 0x0000FF) + percent);
     return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
   }
   function darken(color, percent) { return lighten(color, -percent); }
@@ -1664,7 +1545,6 @@
   document.querySelectorAll('.btn').forEach(btn => {
     if (btn.dataset.dir) btn.addEventListener('click', () => move(btn.dataset.dir));
   });
-
   $('shootBtn').addEventListener('click', () => {
     if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
     haptic('shot');
@@ -1759,9 +1639,7 @@
           if (p.alive === false) continue;
           const dx = p.x - b.x, dy = p.y - b.y;
           if ((dx * dx + dy * dy) ** 0.5 < HALF + b.radius) {
-            socket.emit('hit', {
-              target_sid: sid, dmg: b.dmg, killer: b.owner,
-            });
+            socket.emit('hit', { target_sid: sid, dmg: b.dmg, killer: b.owner });
             if (!b.hit_targets) b.hit_targets = [];
             b.hit_targets.push(sid);
             spawnParticles(b.x, b.y, '#ff4040', 10);
