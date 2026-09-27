@@ -1,5 +1,5 @@
 from flask import Flask, send_from_directory, request
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
 import random
 import string
@@ -10,12 +10,31 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'cubewar_secret'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
-GAMES = {}
+SERVER_CODE = "MAIN"
+
+GAME = {
+    "players": {},
+    "walls": {},
+    "farms": {},
+    "crates": {},
+    "wall_id": 0,
+    "farm_id": 0,
+    "crate_id": 0,
+    "last_crate_spawn": time.time(),
+    "started": False,
+    "start_time": 0,
+    "zone": {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False},
+    "last_zone_tick": 0,
+    "passive_running": False,
+    "next_idx": 0,
+    "countdown_active": False,
+    "countdown_started_at": 0,
+}
 
 COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6",
           "#f39c12", "#1abc9c", "#e91e63", "#34495e"]
 
-MAX_PLAYERS = 8
+MAX_PLAYERS = 6
 COOLDOWN = 0.5
 W, H = 1200, 1200
 WALL_HP = 4
@@ -45,6 +64,9 @@ ZONE_TICK = 10
 ZONE_DAMAGE = 2
 ZONE_STEP = 40
 
+COUNTDOWN_SECONDS = 20
+MIN_PLAYERS = 2
+
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 5, "bullets": 1, "cost": 0,   "pierce": False},
     {"name": "Двойной",  "dmg": 5, "bullets": 2, "cost": 15,  "pierce": False},
@@ -56,12 +78,7 @@ GUN_LEVELS = [
 BONUS_TYPES = ["shield", "big_bullets"]
 
 
-def generate_code():
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-
 def get_spawns(count):
-    """Фиксированные спавны по кругу — для 1-8 игроков."""
     cx, cy = W // 2, H // 2
     r = min(W, H) // 2 - 150
     positions = []
@@ -160,25 +177,9 @@ def new_player_dict(name, idx):
     }
 
 
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
-
-
-@app.route('/<path:path>')
-def static_files(path):
-    return send_from_directory('.', path)
-
-
-@socketio.on('create_game')
-def on_create(data):
-    code = generate_code()
-    while code in GAMES:
-        code = generate_code()
-    sid = request.sid
-    name = data.get('name', 'Игрок')[:12]
-    GAMES[code] = {
-        "host": sid,
+def reset_game():
+    global GAME
+    GAME = {
         "players": {},
         "walls": {},
         "farms": {},
@@ -193,106 +194,144 @@ def on_create(data):
         "last_zone_tick": 0,
         "passive_running": False,
         "next_idx": 0,
+        "countdown_active": False,
+        "countdown_started_at": 0,
     }
-    GAMES[code]["players"][sid] = new_player_dict(name, 0)
-    GAMES[code]["next_idx"] = 1
-    join_room(code)
-    emit('joined', {
-        "code": code,
-        "players": GAMES[code]["players"],
-        "my_color": COLORS[0],
-        "cooldown": COOLDOWN,
-        "walls": {},
-        "farms": {},
-        "crates": {},
-        "gun_levels": GUN_LEVELS,
-        "farm_cost": FARM_COST,
-        "wall_cost": WALL_COST,
-        "started": False,
-        "world_w": W,
-        "world_h": H,
-    })
 
 
-@socketio.on('join_game')
-def on_join(data):
-    code = data.get('code', '').upper()
+def broadcast_player_list():
+    players_info = {}
+    for sid, p in GAME["players"].items():
+        players_info[sid] = {
+            "name": p["name"],
+            "color": p["color"],
+            "hp": p["hp"],
+            "coins": p["coins"],
+            "kills": p["kills"],
+            "gun_level": p["gun_level"],
+            "shield_until": p.get("shield_until", 0),
+            "big_bullets_until": p.get("big_bullets_until", 0),
+        }
+
+    countdown_left = 0
+    if GAME["countdown_active"]:
+        elapsed = time.time() - GAME["countdown_started_at"]
+        countdown_left = max(0, COUNTDOWN_SECONDS - int(elapsed))
+
+    socketio.server.emit('server_update', {
+        "players": players_info,
+        "player_count": len(GAME["players"]),
+        "max_players": MAX_PLAYERS,
+        "countdown_active": GAME["countdown_active"],
+        "countdown_left": countdown_left,
+        "started": GAME["started"],
+    }, room=SERVER_CODE, namespace='/')
+
+
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
+
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('.', path)
+
+
+@socketio.on('join_server')
+def on_join_server(data):
     sid = request.sid
     name = data.get('name', 'Игрок')[:12]
-    if code not in GAMES:
-        emit('error_msg', {"text": "Комната не найдена"})
+
+    if sid in GAME["players"]:
+        emit('error_msg', {"text": "Ты уже на сервере"})
         return
-    game = GAMES[code]
-    if len(game["players"]) >= MAX_PLAYERS:
-        emit('error_msg', {"text": "Комната полна"})
+
+    if GAME["started"]:
+        emit('error_msg', {"text": "Игра уже идёт. Подожди следующую."})
         return
-    if game.get("started"):
-        emit('error_msg', {"text": "Игра уже началась"})
+
+    if len(GAME["players"]) >= MAX_PLAYERS:
+        emit('error_msg', {"text": "Сервер полон (6/6)"})
         return
-    idx = game.get("next_idx", 0)
-    game["next_idx"] = idx + 1
-    game["players"][sid] = new_player_dict(name, idx)
-    join_room(code)
+
+    idx = GAME.get("next_idx", 0)
+    GAME["next_idx"] = idx + 1
+    GAME["players"][sid] = new_player_dict(name, idx)
+
+    join_room(SERVER_CODE)
+
     emit('joined', {
-        "code": code,
-        "players": game["players"],
-        "my_color": COLORS[idx % len(COLORS)],
+        "my_color": GAME["players"][sid]["color"],
         "cooldown": COOLDOWN,
-        "walls": game["walls"],
-        "farms": game["farms"],
-        "crates": game["crates"],
         "gun_levels": GUN_LEVELS,
         "farm_cost": FARM_COST,
         "wall_cost": WALL_COST,
-        "started": False,
         "world_w": W,
         "world_h": H,
     })
-    emit('player_joined', {
-        "sid": sid,
-        "player": game["players"][sid],
-    }, to=code, include_self=False)
+
+    broadcast_player_list()
+    check_countdown()
 
 
 @socketio.on('toggle_ready')
 def on_toggle_ready(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            p["ready"] = not p.get("ready", False)
-            emit('ready_changed', {
-                "sid": sid,
-                "ready": p["ready"],
-            }, to=code)
-            break
+    if sid in GAME["players"]:
+        p = GAME["players"][sid]
+        p["ready"] = not p.get("ready", False)
+        broadcast_player_list()
 
 
-@socketio.on('start_game')
-def on_start_game(data):
-    code = data.get('code', '').upper()
-    if code not in GAMES:
+def check_countdown():
+    if GAME["started"] or GAME["countdown_active"]:
         return
-    game = GAMES[code]
-    if request.sid != game["host"]:
-        emit('error_msg', {"text": "Только хост"})
+    if len(GAME["players"]) < MIN_PLAYERS:
         return
-    if game.get("started"):
-        return
-    players = game["players"]
-    if len(players) < 1:
-        emit('error_msg', {"text": "Нужен хотя бы 1 игрок"})
-        return
-    if len(players) > 1:
-        not_ready = [p["name"] for p in players.values() if not p.get("ready")]
-        if not_ready:
-            emit('error_msg', {"text": "Не все готовы: " + ", ".join(not_ready)})
+
+    GAME["countdown_active"] = True
+    GAME["countdown_started_at"] = time.time()
+    broadcast_player_list()
+
+    if len(GAME["players"]) >= MAX_PLAYERS:
+        GAME["countdown_started_at"] = time.time() - (COUNTDOWN_SECONDS - 5)
+
+    socketio.start_background_task(countdown_loop)
+
+
+def countdown_loop():
+    while GAME.get("countdown_active"):
+        socketio.sleep(1)
+        if not GAME["countdown_active"]:
+            return
+        if len(GAME["players"]) < MIN_PLAYERS:
+            GAME["countdown_active"] = False
+            GAME["countdown_started_at"] = 0
+            broadcast_player_list()
             return
 
-    game["started"] = True
-    game["start_time"] = time.time()
-    game["zone"] = {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False}
-    game["last_zone_tick"] = 0
+        elapsed = time.time() - GAME["countdown_started_at"]
+        left = COUNTDOWN_SECONDS - int(elapsed)
+
+        if left <= 0:
+            GAME["countdown_active"] = False
+            start_game()
+            return
+
+        broadcast_player_list()
+
+
+def start_game():
+    players = GAME["players"]
+    if len(players) < MIN_PLAYERS:
+        return
+
+    GAME["started"] = True
+    GAME["start_time"] = time.time()
+    GAME["zone"] = {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False}
+    GAME["last_zone_tick"] = 0
+
     spawns = get_spawns(len(players))
     for i, (sid, p) in enumerate(players.items()):
         p["x"], p["y"] = spawns[i]
@@ -307,68 +346,79 @@ def on_start_game(data):
         p["big_bullets_until"] = 0
         p["last_zone_damage"] = 0
 
-    game["crates"] = {}
-    game["crate_id"] = 0
-    game["last_crate_spawn"] = time.time()
+    GAME["crates"] = {}
+    GAME["crate_id"] = 0
+    GAME["last_crate_spawn"] = time.time()
 
-    emit('game_started', {
-        "players": players,
-        "walls": game["walls"],
-        "farms": game["farms"],
-        "crates": game["crates"],
+    players_info = {}
+    for sid, p in players.items():
+        players_info[sid] = {
+            "name": p["name"],
+            "x": p["x"], "y": p["y"],
+            "dir": p["dir"],
+            "hp": p["hp"],
+            "max_hp": p["max_hp"],
+            "coins": p["coins"],
+            "kills": p["kills"],
+            "gun_level": p["gun_level"],
+            "color": p["color"],
+            "shield_until": 0,
+            "big_bullets_until": 0,
+        }
+
+    socketio.server.emit('game_started', {
+        "players": players_info,
+        "walls": GAME["walls"],
+        "farms": GAME["farms"],
+        "crates": GAME["crates"],
         "world_w": W,
         "world_h": H,
-        "start_time": game["start_time"],
-        "countdown": 3,
-    }, to=code)
+    }, room=SERVER_CODE, namespace='/')
 
-    if not game.get("passive_running"):
-        game["passive_running"] = True
-        socketio.start_background_task(passive_loop, code)
+    if not GAME.get("passive_running"):
+        GAME["passive_running"] = True
+        socketio.start_background_task(passive_loop)
 
 
-def spawn_crate(game):
+def spawn_crate():
     x, y = random_crate_pos()
     for _ in range(20):
-        if (not check_wall_collision(game, x, y) and
-                not check_farm_collision(game, x, y) and
-                not check_crate_collision(game, x, y)):
+        if (not check_wall_collision(GAME, x, y) and
+                not check_farm_collision(GAME, x, y) and
+                not check_crate_collision(GAME, x, y)):
             break
         x, y = random_crate_pos()
     else:
         return None
-    game["crate_id"] += 1
-    cid = str(game["crate_id"])
-    game["crates"][cid] = {
+    GAME["crate_id"] += 1
+    cid = str(GAME["crate_id"])
+    GAME["crates"][cid] = {
         "x": x, "y": y,
         "hp": CRATE_HP,
         "max_hp": CRATE_HP,
         "bonus": random.choice(BONUS_TYPES),
     }
-    return cid, game["crates"][cid]
+    return cid, GAME["crates"][cid]
 
 
-def passive_loop(code):
+def passive_loop():
     tick_count = 0
     while True:
         socketio.sleep(1)
-        if code not in GAMES:
-            return
-        g = GAMES[code]
-        if not g.get("started"):
+        if not GAME.get("started"):
             return
         now = time.time()
-        elapsed = now - g.get("start_time", now)
+        elapsed = now - GAME.get("start_time", now)
         tick_count += 1
 
-        zone = g["zone"]
+        zone = GAME["zone"]
         if elapsed >= ZONE_START_TIME:
             if not zone["warn"]:
                 zone["warn"] = True
                 zone["active"] = True
-                socketio.server.emit('zone_warning', {}, room=code, namespace='/')
-            if now - g.get("last_zone_tick", 0) >= ZONE_TICK:
-                g["last_zone_tick"] = now
+                socketio.server.emit('zone_warning', {}, room=SERVER_CODE, namespace='/')
+            if now - GAME.get("last_zone_tick", 0) >= ZONE_TICK:
+                GAME["last_zone_tick"] = now
                 zone["left"] += ZONE_STEP
                 zone["top"] += ZONE_STEP
                 zone["right"] += ZONE_STEP
@@ -384,16 +434,16 @@ def passive_loop(code):
                     "top": zone["top"],
                     "right": zone["right"],
                     "bottom": zone["bottom"],
-                }, room=code, namespace='/')
+                }, room=SERVER_CODE, namespace='/')
 
-        for sid, p in g["players"].items():
+        for sid, p in GAME["players"].items():
             if p["hp"] <= 0:
                 continue
             if now - p.get("last_passive", 0) >= PASSIVE_INCOME_TIME:
                 p["coins"] += PASSIVE_INCOME
                 p["last_passive"] = now
 
-        for sid, p in g["players"].items():
+        for sid, p in GAME["players"].items():
             if p["hp"] <= 0:
                 continue
             if now - p.get("last_regen", 0) >= REGEN_TIME:
@@ -402,10 +452,10 @@ def passive_loop(code):
                 p["last_regen"] = now
 
         if zone["active"]:
-            for sid, p in g["players"].items():
+            for sid, p in GAME["players"].items():
                 if p["hp"] <= 0:
                     continue
-                if in_zone(g, p["x"], p["y"]):
+                if in_zone(GAME, p["x"], p["y"]):
                     if now - p.get("last_zone_damage", 0) >= 1:
                         if now < p.get("shield_until", 0):
                             p["last_zone_damage"] = now
@@ -414,62 +464,56 @@ def passive_loop(code):
                         p["last_zone_damage"] = now
                         socketio.server.emit('player_hit', {
                             "sid": sid, "hp": p["hp"], "zone": True
-                        }, room=code, namespace='/')
+                        }, room=SERVER_CODE, namespace='/')
                         if p["hp"] <= 0:
                             socketio.server.emit('player_died', {
                                 "sid": sid, "killer": None, "zone": True
-                            }, room=code, namespace='/')
-                            alive = [s for s, pl in g["players"].items() if pl["hp"] > 0]
-                            if len(alive) <= 1 and len(g["players"]) > 1:
-                                winner = g["players"].get(alive[0]) if alive else None
-                                socketio.server.emit('game_over', {
-                                    "winner": winner["name"] if winner else "Ничья",
-                                    "sid": alive[0] if alive else None,
-                                }, room=code, namespace='/')
-            for wid, w in list(g["walls"].items()):
-                if in_zone(g, w["x"], w["y"]):
+                            }, room=SERVER_CODE, namespace='/')
+                            check_win()
+            for wid, w in list(GAME["walls"].items()):
+                if in_zone(GAME, w["x"], w["y"]):
                     w["hp"] -= 1
                     socketio.server.emit('wall_hit', {
                         "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
-                    }, room=code, namespace='/')
+                    }, room=SERVER_CODE, namespace='/')
                     if w["hp"] <= 0:
-                        del g["walls"][wid]
+                        del GAME["walls"][wid]
                         socketio.server.emit('wall_destroyed', {
                             "id": wid, "x": w["x"], "y": w["y"],
-                        }, room=code, namespace='/')
-            for fid, f in list(g["farms"].items()):
-                if in_zone(g, f["x"], f["y"]):
+                        }, room=SERVER_CODE, namespace='/')
+            for fid, f in list(GAME["farms"].items()):
+                if in_zone(GAME, f["x"], f["y"]):
                     f["hp"] -= 1
                     socketio.server.emit('farm_hit', {
                         "id": fid, "hp": f["hp"], "x": f["x"], "y": f["y"],
-                    }, room=code, namespace='/')
+                    }, room=SERVER_CODE, namespace='/')
                     if f["hp"] <= 0:
-                        del g["farms"][fid]
+                        del GAME["farms"][fid]
                         socketio.server.emit('farm_destroyed', {
                             "id": fid, "x": f["x"], "y": f["y"],
-                        }, room=code, namespace='/')
+                        }, room=SERVER_CODE, namespace='/')
 
-        for fid, farm in list(g["farms"].items()):
+        for fid, farm in list(GAME["farms"].items()):
             if farm["hp"] <= 0:
-                del g["farms"][fid]
+                del GAME["farms"][fid]
                 continue
             if now - farm.get("last_income", 0) >= FARM_INCOME_TIME:
                 owner_sid = farm.get("owner")
-                if owner_sid and owner_sid in g["players"]:
-                    g["players"][owner_sid]["coins"] += FARM_INCOME
+                if owner_sid and owner_sid in GAME["players"]:
+                    GAME["players"][owner_sid]["coins"] += FARM_INCOME
                     socketio.server.emit('farm_income', {
                         "id": fid,
                         "x": farm["x"],
                         "y": farm["y"],
                         "amount": FARM_INCOME,
                         "owner": owner_sid,
-                    }, room=code, namespace='/')
+                    }, room=SERVER_CODE, namespace='/')
                 farm["last_income"] = now
 
-        alive_crates = [c for c in g["crates"].values() if c["hp"] > 0]
+        alive_crates = [c for c in GAME["crates"].values() if c["hp"] > 0]
         if (len(alive_crates) < MAX_CRATES and
-                now - g.get("last_crate_spawn", 0) >= CRATE_RESPAWN):
-            result = spawn_crate(g)
+                now - GAME.get("last_crate_spawn", 0) >= CRATE_RESPAWN):
+            result = spawn_crate()
             if result:
                 cid, crate = result
                 socketio.server.emit('crate_spawned', {
@@ -479,8 +523,8 @@ def passive_loop(code):
                     "hp": crate["hp"],
                     "max_hp": crate["max_hp"],
                     "bonus": crate["bonus"],
-                }, room=code, namespace='/')
-                g["last_crate_spawn"] = now
+                }, room=SERVER_CODE, namespace='/')
+                GAME["last_crate_spawn"] = now
 
         if tick_count % 2 == 0:
             socketio.server.emit('tick_update', {
@@ -492,11 +536,11 @@ def passive_loop(code):
                         "shield_until": p.get("shield_until", 0),
                         "big_bullets_until": p.get("big_bullets_until", 0),
                     }
-                    for s, p in g["players"].items()
+                    for s, p in GAME["players"].items()
                 },
                 "crates": {
                     cid: {"hp": c["hp"], "x": c["x"], "y": c["y"], "bonus": c["bonus"]}
-                    for cid, c in g["crates"].items() if c["hp"] > 0
+                    for cid, c in GAME["crates"].items() if c["hp"] > 0
                 },
                 "zone": {
                     "active": zone["active"],
@@ -507,330 +551,328 @@ def passive_loop(code):
                     "warn": zone["warn"],
                 },
                 "elapsed": elapsed,
-            }, room=code, namespace='/')
+            }, room=SERVER_CODE, namespace='/')
+
+
+def check_win():
+    alive = [s for s, p in GAME["players"].items() if p["hp"] > 0]
+    if len(alive) <= 1 and len(GAME["players"]) > 1:
+        winner = GAME["players"].get(alive[0]) if alive else None
+        socketio.server.emit('game_over', {
+            "winner": winner["name"] if winner else "Ничья",
+            "sid": alive[0] if alive else None,
+        }, room=SERVER_CODE, namespace='/')
+        socketio.start_background_task(reset_after_game)
+
+
+def reset_after_game():
+    socketio.sleep(5)
+    reset_game()
+    socketio.server.emit('server_reset', {}, room=SERVER_CODE, namespace='/')
 
 
 @socketio.on('emotion')
 def on_emotion(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            now = time.time()
-            last = p.get("last_emotion", 0)
-            if now - last < EMOTION_COOLDOWN:
-                left = EMOTION_COOLDOWN - (now - last)
-                emit('emotion_cooldown', {"left": left}, to=sid)
-                return
-            p["last_emotion"] = now
-            emoji = data.get("emoji", "😂")
-            if len(emoji) > 4:
-                emoji = emoji[:4]
-            emit('emotion_shown', {
-                "sid": sid,
-                "emoji": emoji,
-                "x": p["x"],
-                "y": p["y"],
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    now = time.time()
+    last = p.get("last_emotion", 0)
+    if now - last < EMOTION_COOLDOWN:
+        left = EMOTION_COOLDOWN - (now - last)
+        emit('emotion_cooldown', {"left": left}, to=sid)
+        return
+    p["last_emotion"] = now
+    emoji = data.get("emoji", "😂")
+    if len(emoji) > 4:
+        emoji = emoji[:4]
+    emit('emotion_shown', {
+        "sid": sid,
+        "emoji": emoji,
+        "x": p["x"],
+        "y": p["y"],
+    }, to=SERVER_CODE)
 
 
 @socketio.on('move')
 def on_move(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            if not can_act(p):
-                emit('on_cooldown', {}, to=sid)
-                return
-            nx = data.get("x", p["x"])
-            ny = data.get("y", p["y"])
-            if check_wall_collision(game, nx, ny):
-                emit('error_msg', {"text": "Стена!"})
-                return
-            if check_farm_collision(game, nx, ny):
-                emit('error_msg', {"text": "Ферма!"})
-                return
-            if check_crate_collision(game, nx, ny):
-                emit('error_msg', {"text": "Ящик!"})
-                return
-            p["x"] = nx
-            p["y"] = ny
-            p["dir"] = data.get("dir", p["dir"])
-            mark_action(p)
-            emit('player_moved', {
-                "sid": sid, "x": p["x"], "y": p["y"], "dir": p["dir"],
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    if not can_act(p):
+        emit('on_cooldown', {}, to=sid)
+        return
+    nx = data.get("x", p["x"])
+    ny = data.get("y", p["y"])
+    if check_wall_collision(GAME, nx, ny):
+        emit('error_msg', {"text": "Стена!"})
+        return
+    if check_farm_collision(GAME, nx, ny):
+        emit('error_msg', {"text": "Ферма!"})
+        return
+    if check_crate_collision(GAME, nx, ny):
+        emit('error_msg', {"text": "Ящик!"})
+        return
+    p["x"] = nx
+    p["y"] = ny
+    p["dir"] = data.get("dir", p["dir"])
+    mark_action(p)
+    emit('player_moved', {
+        "sid": sid, "x": p["x"], "y": p["y"], "dir": p["dir"],
+    }, to=SERVER_CODE)
 
 
 @socketio.on('place_wall')
 def on_place_wall(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            if not can_act(p):
-                emit('on_cooldown', {}, to=sid)
-                return
-            if p["coins"] < WALL_COST:
-                emit('error_msg', {"text": f"Нужно {WALL_COST} очков"})
-                return
-            wx = p["x"] - p["dir"]["x"] * 50
-            wy = p["y"] - p["dir"]["y"] * 50
-            wx = max(25, min(W - 25, wx))
-            wy = max(25, min(H - 25, wy))
-            for other_sid, other in game["players"].items():
-                if other_sid == sid:
-                    continue
-                if other["hp"] <= 0:
-                    continue
-                if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
-                    emit('error_msg', {"text": "Тут игрок"})
-                    return
-            if check_wall_collision(game, wx, wy):
-                return
-            if check_farm_collision(game, wx, wy):
-                return
-            if check_crate_collision(game, wx, wy):
-                emit('error_msg', {"text": "Тут ящик"})
-                return
-            game["wall_id"] += 1
-            wid = str(game["wall_id"])
-            game["walls"][wid] = {"x": wx, "y": wy, "hp": WALL_HP, "owner": sid}
-            p["coins"] -= WALL_COST
-            mark_action(p)
-            emit('wall_placed', {
-                "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
-                "my_coins": p["coins"],
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    if not can_act(p):
+        emit('on_cooldown', {}, to=sid)
+        return
+    if p["coins"] < WALL_COST:
+        emit('error_msg', {"text": f"Нужно {WALL_COST} очков"})
+        return
+    wx = p["x"] - p["dir"]["x"] * 50
+    wy = p["y"] - p["dir"]["y"] * 50
+    wx = max(25, min(W - 25, wx))
+    wy = max(25, min(H - 25, wy))
+    for other_sid, other in GAME["players"].items():
+        if other_sid == sid:
+            continue
+        if other["hp"] <= 0:
+            continue
+        if abs(other["x"] - wx) < 50 and abs(other["y"] - wy) < 50:
+            emit('error_msg', {"text": "Тут игрок"})
+            return
+    if check_wall_collision(GAME, wx, wy):
+        return
+    if check_farm_collision(GAME, wx, wy):
+        return
+    if check_crate_collision(GAME, wx, wy):
+        emit('error_msg', {"text": "Тут ящик"})
+        return
+    GAME["wall_id"] += 1
+    wid = str(GAME["wall_id"])
+    GAME["walls"][wid] = {"x": wx, "y": wy, "hp": WALL_HP, "owner": sid}
+    p["coins"] -= WALL_COST
+    mark_action(p)
+    emit('wall_placed', {
+        "id": wid, "x": wx, "y": wy, "hp": WALL_HP,
+        "my_coins": p["coins"],
+    }, to=SERVER_CODE)
 
 
 @socketio.on('place_farm')
 def on_place_farm(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            if p["coins"] < FARM_COST:
-                emit('error_msg', {"text": f"Нужно {FARM_COST} очков"})
-                return
-            wx = p["x"] - p["dir"]["x"] * 50
-            wy = p["y"] - p["dir"]["y"] * 50
-            wx = max(40, min(W - 40, wx))
-            wy = max(40, min(H - 40, wy))
-            for other_sid, other in game["players"].items():
-                if other_sid == sid:
-                    continue
-                if other["hp"] <= 0:
-                    continue
-                if abs(other["x"] - wx) < 60 and abs(other["y"] - wy) < 60:
-                    emit('error_msg', {"text": "Тут игрок"})
-                    return
-            if check_wall_collision(game, wx, wy):
-                emit('error_msg', {"text": "Стена мешает"})
-                return
-            if check_farm_collision(game, wx, wy):
-                emit('error_msg', {"text": "Тут уже ферма"})
-                return
-            if check_crate_collision(game, wx, wy):
-                emit('error_msg', {"text": "Тут ящик"})
-                return
-            game["farm_id"] += 1
-            fid = str(game["farm_id"])
-            game["farms"][fid] = {
-                "x": wx, "y": wy,
-                "hp": WALL_HP * 2,
-                "owner": sid,
-                "last_income": time.time(),
-            }
-            p["coins"] -= FARM_COST
-            emit('farm_placed', {
-                "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
-                "my_coins": p["coins"],
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    if p["coins"] < FARM_COST:
+        emit('error_msg', {"text": f"Нужно {FARM_COST} очков"})
+        return
+    wx = p["x"] - p["dir"]["x"] * 50
+    wy = p["y"] - p["dir"]["y"] * 50
+    wx = max(40, min(W - 40, wx))
+    wy = max(40, min(H - 40, wy))
+    for other_sid, other in GAME["players"].items():
+        if other_sid == sid:
+            continue
+        if other["hp"] <= 0:
+            continue
+        if abs(other["x"] - wx) < 60 and abs(other["y"] - wy) < 60:
+            emit('error_msg', {"text": "Тут игрок"})
+            return
+    if check_wall_collision(GAME, wx, wy):
+        emit('error_msg', {"text": "Стена мешает"})
+        return
+    if check_farm_collision(GAME, wx, wy):
+        emit('error_msg', {"text": "Тут уже ферма"})
+        return
+    if check_crate_collision(GAME, wx, wy):
+        emit('error_msg', {"text": "Тут ящик"})
+        return
+    GAME["farm_id"] += 1
+    fid = str(GAME["farm_id"])
+    GAME["farms"][fid] = {
+        "x": wx, "y": wy,
+        "hp": WALL_HP * 2,
+        "owner": sid,
+        "last_income": time.time(),
+    }
+    p["coins"] -= FARM_COST
+    emit('farm_placed', {
+        "id": fid, "x": wx, "y": wy, "hp": WALL_HP * 2,
+        "my_coins": p["coins"],
+    }, to=SERVER_CODE)
 
 
 @socketio.on('upgrade_gun')
 def on_upgrade_gun(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            cur = p["gun_level"]
-            nxt = cur + 1
-            if nxt >= len(GUN_LEVELS):
-                emit('error_msg', {"text": "Максимум"})
-                return
-            cost = GUN_LEVELS[nxt]["cost"]
-            if p["coins"] < cost:
-                emit('error_msg', {"text": f"Нужно {cost} очков"})
-                return
-            p["coins"] -= cost
-            p["gun_level"] = nxt
-            emit('gun_upgraded', {
-                "sid": sid,
-                "gun_level": nxt,
-                "my_coins": p["coins"],
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    cur = p["gun_level"]
+    nxt = cur + 1
+    if nxt >= len(GUN_LEVELS):
+        emit('error_msg', {"text": "Максимум"})
+        return
+    cost = GUN_LEVELS[nxt]["cost"]
+    if p["coins"] < cost:
+        emit('error_msg', {"text": f"Нужно {cost} очков"})
+        return
+    p["coins"] -= cost
+    p["gun_level"] = nxt
+    emit('gun_upgraded', {
+        "sid": sid,
+        "gun_level": nxt,
+        "my_coins": p["coins"],
+    }, to=SERVER_CODE)
 
 
 @socketio.on('shoot')
 def on_shoot(data):
     sid = request.sid
-    for code, game in GAMES.items():
-        if sid in game["players"]:
-            p = game["players"][sid]
-            if p["hp"] <= 0 or not game.get("started"):
-                return
-            if not can_act(p):
-                emit('on_cooldown', {}, to=sid)
-                return
-            lvl = p["gun_level"]
-            gun = GUN_LEVELS[lvl]
-            now = time.time()
-            big = now < p.get("big_bullets_until", 0)
-            mark_action(p)
-            emit('bullet_fired', {
-                "sid": sid,
-                "x": p["x"], "y": p["y"],
-                "dir": p["dir"],
-                "color": p["color"],
-                "dmg": BULLET_DMG,
-                "bullets": gun["bullets"],
-                "pierce": gun["pierce"],
-                "gun_level": lvl,
-                "big": big,
-            }, to=code)
-            break
+    if sid not in GAME["players"]:
+        return
+    p = GAME["players"][sid]
+    if p["hp"] <= 0 or not GAME.get("started"):
+        return
+    if not can_act(p):
+        emit('on_cooldown', {}, to=sid)
+        return
+    lvl = p["gun_level"]
+    gun = GUN_LEVELS[lvl]
+    now = time.time()
+    big = now < p.get("big_bullets_until", 0)
+    mark_action(p)
+    emit('bullet_fired', {
+        "sid": sid,
+        "x": p["x"], "y": p["y"],
+        "dir": p["dir"],
+        "color": p["color"],
+        "dmg": BULLET_DMG,
+        "bullets": gun["bullets"],
+        "pierce": gun["pierce"],
+        "gun_level": lvl,
+        "big": big,
+    }, to=SERVER_CODE)
 
 
 @socketio.on('hit')
 def on_hit(data):
     target_sid = data.get("target_sid")
     dmg = data.get("dmg", BULLET_DMG)
-    for code, game in GAMES.items():
-        if target_sid in game["players"]:
-            p = game["players"][target_sid]
-            if p["hp"] <= 0:
-                break
-            if time.time() < p.get("shield_until", 0):
-                emit('player_shielded', {"sid": target_sid}, to=code)
-                break
-            p["hp"] = max(0, p["hp"] - dmg)
-            emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=code)
-            if p["hp"] <= 0:
-                killer_sid = data.get("killer")
-                if killer_sid and killer_sid in game["players"]:
-                    game["players"][killer_sid]["coins"] += KILL_REWARD
-                    game["players"][killer_sid]["kills"] += 1
-                emit('player_died', {
-                    "sid": target_sid,
-                    "killer": killer_sid,
-                }, to=code)
-                alive = [s for s, pl in game["players"].items() if pl["hp"] > 0]
-                if len(alive) <= 1 and len(game["players"]) > 1:
-                    winner = game["players"].get(alive[0]) if alive else None
-                    emit('game_over', {
-                        "winner": winner["name"] if winner else "Ничья",
-                        "sid": alive[0] if alive else None,
-                    }, to=code)
-            break
+    if target_sid not in GAME["players"]:
+        return
+    p = GAME["players"][target_sid]
+    if p["hp"] <= 0:
+        return
+    if time.time() < p.get("shield_until", 0):
+        emit('player_shielded', {"sid": target_sid}, to=SERVER_CODE)
+        return
+    p["hp"] = max(0, p["hp"] - dmg)
+    emit('player_hit', {"sid": target_sid, "hp": p["hp"]}, to=SERVER_CODE)
+    if p["hp"] <= 0:
+        killer_sid = data.get("killer")
+        if killer_sid and killer_sid in GAME["players"]:
+            GAME["players"][killer_sid]["coins"] += KILL_REWARD
+            GAME["players"][killer_sid]["kills"] += 1
+        emit('player_died', {
+            "sid": target_sid,
+            "killer": killer_sid,
+        }, to=SERVER_CODE)
+        check_win()
 
 
 @socketio.on('hit_wall')
 def on_hit_wall(data):
     wid = data.get("wall_id")
-    for code, game in GAMES.items():
-        if wid in game["walls"]:
-            w = game["walls"][wid]
-            w["hp"] -= 1
-            emit('wall_hit', {
-                "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
-            }, to=code)
-            if w["hp"] <= 0:
-                del game["walls"][wid]
-                emit('wall_destroyed', {
-                    "id": wid, "x": w["x"], "y": w["y"],
-                }, to=code)
-            break
+    if wid in GAME["walls"]:
+        w = GAME["walls"][wid]
+        w["hp"] -= 1
+        emit('wall_hit', {
+            "id": wid, "hp": w["hp"], "x": w["x"], "y": w["y"],
+        }, to=SERVER_CODE)
+        if w["hp"] <= 0:
+            del GAME["walls"][wid]
+            emit('wall_destroyed', {
+                "id": wid, "x": w["x"], "y": w["y"],
+            }, to=SERVER_CODE)
 
 
 @socketio.on('hit_farm')
 def on_hit_farm(data):
     fid = data.get("farm_id")
-    for code, game in GAMES.items():
-        if fid in game["farms"]:
-            f = game["farms"][fid]
-            f["hp"] -= 1
-            emit('farm_hit', {
-                "id": fid, "hp": f["hp"], "x": f["x"], "y": f["y"],
-            }, to=code)
-            if f["hp"] <= 0:
-                del game["farms"][fid]
-                emit('farm_destroyed', {
-                    "id": fid, "x": f["x"], "y": f["y"],
-                }, to=code)
-            break
+    if fid in GAME["farms"]:
+        f = GAME["farms"][fid]
+        f["hp"] -= 1
+        emit('farm_hit', {
+            "id": fid, "hp": f["hp"], "x": f["x"], "y": f["y"],
+        }, to=SERVER_CODE)
+        if f["hp"] <= 0:
+            del GAME["farms"][fid]
+            emit('farm_destroyed', {
+                "id": fid, "x": f["x"], "y": f["y"],
+            }, to=SERVER_CODE)
 
 
 @socketio.on('hit_crate')
 def on_hit_crate(data):
     cid = data.get("crate_id")
     sid = request.sid
-    for code, game in GAMES.items():
-        if cid in game["crates"]:
-            c = game["crates"][cid]
-            if c["hp"] <= 0:
-                break
-            c["hp"] -= 1
-            emit('crate_hit', {
-                "id": cid, "hp": c["hp"], "x": c["x"], "y": c["y"],
-            }, to=code)
-            if c["hp"] <= 0:
-                bonus = c["bonus"]
-                if sid in game["players"]:
-                    p = game["players"][sid]
-                    now = time.time()
-                    if bonus == "shield":
-                        p["shield_until"] = now + BONUS_SHIELD_TIME
-                    elif bonus == "big_bullets":
-                        p["big_bullets_until"] = now + BONUS_BIG_BULLETS_TIME
-                emit('crate_destroyed', {
-                    "id": cid, "x": c["x"], "y": c["y"],
-                    "bonus": bonus,
-                    "player_sid": sid,
-                }, to=code)
-                del game["crates"][cid]
-            break
+    if cid not in GAME["crates"]:
+        return
+    c = GAME["crates"][cid]
+    if c["hp"] <= 0:
+        return
+    c["hp"] -= 1
+    emit('crate_hit', {
+        "id": cid, "hp": c["hp"], "x": c["x"], "y": c["y"],
+    }, to=SERVER_CODE)
+    if c["hp"] <= 0:
+        bonus = c["bonus"]
+        if sid in GAME["players"]:
+            p = GAME["players"][sid]
+            now = time.time()
+            if bonus == "shield":
+                p["shield_until"] = now + BONUS_SHIELD_TIME
+            elif bonus == "big_bullets":
+                p["big_bullets_until"] = now + BONUS_BIG_BULLETS_TIME
+        emit('crate_destroyed', {
+            "id": cid, "x": c["x"], "y": c["y"],
+            "bonus": bonus,
+            "player_sid": sid,
+        }, to=SERVER_CODE)
+        del GAME["crates"][cid]
 
 
 @socketio.on('disconnect')
 def on_disconnect():
     sid = request.sid
-    for code, game in list(GAMES.items()):
-        if sid in game["players"]:
-            del game["players"][sid]
-            emit('player_left', {"sid": sid}, to=code)
-            if not game["players"]:
-                del GAMES[code]
-            elif sid == game.get("host") and game["players"]:
-                game["host"] = list(game["players"].keys())[0]
-            break
+    if sid in GAME["players"]:
+        del GAME["players"][sid]
+        emit('player_left', {"sid": sid}, to=SERVER_CODE)
+        broadcast_player_list()
+        if len(GAME["players"]) < MIN_PLAYERS:
+            GAME["countdown_active"] = False
+            GAME["countdown_started_at"] = 0
+            broadcast_player_list()
 
 
 if __name__ == '__main__':
