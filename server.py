@@ -4,6 +4,7 @@ import os
 import random
 import string
 import time
+import math
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'cubewar_secret'
@@ -16,7 +17,7 @@ COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6",
 
 MAX_PLAYERS = 8
 COOLDOWN = 0.5
-W, H = 1400, 1400          # <-- поле больше
+W, H = 1200, 1200
 WALL_HP = 4
 WALL_COST = 10
 FARM_COST = 20
@@ -27,7 +28,7 @@ PASSIVE_INCOME = 1
 KILL_REWARD = 5
 REGEN_TIME = 3
 REGEN_AMOUNT = 2
-START_COINS = 30
+START_COINS = 500
 EMOTION_COOLDOWN = 6
 
 CRATE_HP = 3
@@ -37,13 +38,12 @@ BONUS_SHIELD_TIME = 10
 BONUS_BIG_BULLETS_TIME = 10
 
 BULLET_DMG = 5
-BULLET_LIFE = 0.6          # <-- пули живут 0.6 сек
+BULLET_LIFE = 0.6
 
-# === ЗОНА СЖАТИЯ ===
-ZONE_START_TIME = 60        # через 1 минуту после старта
-ZONE_TICK = 10              # каждые 10 секунд сжимается
-ZONE_DAMAGE = 2             # урон за тик в зоне
-ZONE_STEP = 40              # на сколько пикселей сжимается за раз (по каждой стороне)
+ZONE_START_TIME = 60
+ZONE_TICK = 10
+ZONE_DAMAGE = 2
+ZONE_STEP = 40
 
 GUN_LEVELS = [
     {"name": "Пистолет", "dmg": 5, "bullets": 1, "cost": 0,   "pierce": False},
@@ -61,14 +61,20 @@ def generate_code():
 
 
 def get_spawns(count):
-    all_positions = [
-        (150, 150), (W - 150, 150), (150, H - 150), (W - 150, H - 150),
-        (W // 2, 150), (W // 2, H - 150), (150, H // 2), (W - 150, H // 2),
-        (W // 3, H // 3), (W * 2 // 3, H // 3),
-        (W // 3, H * 2 // 3), (W * 2 // 3, H * 2 // 3),
-    ]
-    random.shuffle(all_positions)
-    return all_positions[:count]
+    """Фиксированные спавны по кругу — для 1-8 игроков."""
+    cx, cy = W // 2, H // 2
+    r = min(W, H) // 2 - 150
+    positions = []
+    for i in range(count):
+        angle = (2 * math.pi * i / count) - math.pi / 2
+        x = int(cx + r * math.cos(angle))
+        y = int(cy + r * math.sin(angle))
+        x = round(x / 50) * 50
+        y = round(y / 50) * 50
+        x = max(80, min(W - 80, x))
+        y = max(80, min(H - 80, y))
+        positions.append((x, y))
+    return positions
 
 
 def random_crate_pos():
@@ -113,7 +119,6 @@ def check_crate_collision(game, x, y, exclude_id=None):
 
 
 def in_zone(game, x, y):
-    """Проверка: точка внутри активной (красной) зоны."""
     z = game.get("zone")
     if not z or not z.get("active"):
         return False
@@ -186,8 +191,11 @@ def on_create(data):
         "start_time": 0,
         "zone": {"active": False, "left": 0, "top": 0, "right": 0, "bottom": 0, "warn": False},
         "last_zone_tick": 0,
+        "passive_running": False,
+        "next_idx": 0,
     }
     GAMES[code]["players"][sid] = new_player_dict(name, 0)
+    GAMES[code]["next_idx"] = 1
     join_room(code)
     emit('joined', {
         "code": code,
@@ -221,7 +229,8 @@ def on_join(data):
     if game.get("started"):
         emit('error_msg', {"text": "Игра уже началась"})
         return
-    idx = len(game["players"])
+    idx = game.get("next_idx", 0)
+    game["next_idx"] = idx + 1
     game["players"][sid] = new_player_dict(name, idx)
     join_room(code)
     emit('joined', {
@@ -310,9 +319,12 @@ def on_start_game(data):
         "world_w": W,
         "world_h": H,
         "start_time": game["start_time"],
+        "countdown": 3,
     }, to=code)
 
-    socketio.start_background_task(passive_loop, code)
+    if not game.get("passive_running"):
+        game["passive_running"] = True
+        socketio.start_background_task(passive_loop, code)
 
 
 def spawn_crate(game):
@@ -337,6 +349,7 @@ def spawn_crate(game):
 
 
 def passive_loop(code):
+    tick_count = 0
     while True:
         socketio.sleep(1)
         if code not in GAMES:
@@ -346,23 +359,20 @@ def passive_loop(code):
             return
         now = time.time()
         elapsed = now - g.get("start_time", now)
+        tick_count += 1
 
-        # === ЗОНА СЖАТИЯ ===
         zone = g["zone"]
         if elapsed >= ZONE_START_TIME:
             if not zone["warn"]:
                 zone["warn"] = True
                 zone["active"] = True
                 socketio.server.emit('zone_warning', {}, room=code, namespace='/')
-            # сжатие каждые ZONE_TICK секунд
             if now - g.get("last_zone_tick", 0) >= ZONE_TICK:
                 g["last_zone_tick"] = now
-                # сжимаем все стороны
                 zone["left"] += ZONE_STEP
                 zone["top"] += ZONE_STEP
                 zone["right"] += ZONE_STEP
                 zone["bottom"] += ZONE_STEP
-                # ограничение: не сжимать до нуля
                 if zone["left"] + zone["right"] >= W - 200:
                     zone["left"] = (W - 200) // 2
                     zone["right"] = (W - 200) // 2
@@ -376,7 +386,6 @@ def passive_loop(code):
                     "bottom": zone["bottom"],
                 }, room=code, namespace='/')
 
-        # Пассивный доход
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -384,7 +393,6 @@ def passive_loop(code):
                 p["coins"] += PASSIVE_INCOME
                 p["last_passive"] = now
 
-        # Регенерация
         for sid, p in g["players"].items():
             if p["hp"] <= 0:
                 continue
@@ -393,14 +401,12 @@ def passive_loop(code):
                     p["hp"] = min(p["max_hp"], p["hp"] + REGEN_AMOUNT)
                 p["last_regen"] = now
 
-        # Урон в зоне
         if zone["active"]:
             for sid, p in g["players"].items():
                 if p["hp"] <= 0:
                     continue
                 if in_zone(g, p["x"], p["y"]):
                     if now - p.get("last_zone_damage", 0) >= 1:
-                        # щит защищает
                         if now < p.get("shield_until", 0):
                             p["last_zone_damage"] = now
                             continue
@@ -420,7 +426,6 @@ def passive_loop(code):
                                     "winner": winner["name"] if winner else "Ничья",
                                     "sid": alive[0] if alive else None,
                                 }, room=code, namespace='/')
-            # урон постройкам в зоне
             for wid, w in list(g["walls"].items()):
                 if in_zone(g, w["x"], w["y"]):
                     w["hp"] -= 1
@@ -444,7 +449,6 @@ def passive_loop(code):
                             "id": fid, "x": f["x"], "y": f["y"],
                         }, room=code, namespace='/')
 
-        # Доход с ферм
         for fid, farm in list(g["farms"].items()):
             if farm["hp"] <= 0:
                 del g["farms"][fid]
@@ -462,7 +466,6 @@ def passive_loop(code):
                     }, room=code, namespace='/')
                 farm["last_income"] = now
 
-        # Спавн ящиков
         alive_crates = [c for c in g["crates"].values() if c["hp"] > 0]
         if (len(alive_crates) < MAX_CRATES and
                 now - g.get("last_crate_spawn", 0) >= CRATE_RESPAWN):
@@ -479,31 +482,32 @@ def passive_loop(code):
                 }, room=code, namespace='/')
                 g["last_crate_spawn"] = now
 
-        socketio.server.emit('tick_update', {
-            "players": {
-                s: {
-                    "coins": p["coins"],
-                    "hp": p["hp"],
-                    "kills": p["kills"],
-                    "shield_until": p.get("shield_until", 0),
-                    "big_bullets_until": p.get("big_bullets_until", 0),
-                }
-                for s, p in g["players"].items()
-            },
-            "crates": {
-                cid: {"hp": c["hp"], "x": c["x"], "y": c["y"], "bonus": c["bonus"]}
-                for cid, c in g["crates"].items() if c["hp"] > 0
-            },
-            "zone": {
-                "active": zone["active"],
-                "left": zone["left"],
-                "top": zone["top"],
-                "right": zone["right"],
-                "bottom": zone["bottom"],
-                "warn": zone["warn"],
-            },
-            "elapsed": elapsed,
-        }, room=code, namespace='/')
+        if tick_count % 2 == 0:
+            socketio.server.emit('tick_update', {
+                "players": {
+                    s: {
+                        "coins": p["coins"],
+                        "hp": p["hp"],
+                        "kills": p["kills"],
+                        "shield_until": p.get("shield_until", 0),
+                        "big_bullets_until": p.get("big_bullets_until", 0),
+                    }
+                    for s, p in g["players"].items()
+                },
+                "crates": {
+                    cid: {"hp": c["hp"], "x": c["x"], "y": c["y"], "bonus": c["bonus"]}
+                    for cid, c in g["crates"].items() if c["hp"] > 0
+                },
+                "zone": {
+                    "active": zone["active"],
+                    "left": zone["left"],
+                    "top": zone["top"],
+                    "right": zone["right"],
+                    "bottom": zone["bottom"],
+                    "warn": zone["warn"],
+                },
+                "elapsed": elapsed,
+            }, room=code, namespace='/')
 
 
 @socketio.on('emotion')
