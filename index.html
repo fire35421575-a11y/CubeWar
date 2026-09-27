@@ -147,7 +147,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
   // ============================================================
-  // CUBE WAR — PixiJS v8 (WebGL)
+  // CUBE WAR — PixiJS v8 (WebGL) с красивой графикой
   // ============================================================
 
   const tg = window.Telegram?.WebApp;
@@ -170,7 +170,6 @@
     } catch(e) {}
   }
 
-  // === КОНСТАНТЫ ===
   let W = 1200, H = 1200;
   const VIEW_W = 800, VIEW_H = 800;
   const CUBE = 50;
@@ -180,7 +179,6 @@
   const EMOTION_CD = 6;
   const EMOTION_LIFE = 3;
 
-  // === СОСТОЯНИЕ ===
   let socket = null;
   let mySid = null;
   let players = {};
@@ -207,19 +205,16 @@
   let lastAction = 0;
   let emotionCooldownUntil = 0;
 
-  // === PIXI ===
   let app = null;
-  let world = null;          // контейнер для всего игрового мира (камера)
-  let bulletContainer = null; // ParticleContainer для пуль
-  let particleContainer = null; // ParticleContainer для частиц
-  const sprites = {};        // sid -> { cube, hpBg, hpFg, name, barrel }
-  const wallSprites = {};    // wid -> sprite
-  const farmSprites = {};    // fid -> { base, wheel, hpBg, hpFg }
-  const crateSprites = {};   // cid -> { base, icon, hpBg, hpFg }
-  const bulletParticles = new Map(); // bullet object -> particle
+  let world = null;
+  let zoneGraphics = null;
+  const sprites = {};
+  const wallSprites = {};
+  const farmSprites = {};
+  const crateSprites = {};
   const textStyle = { fontFamily: 'Arial', fontSize: 12, fill: 0x000000, fontWeight: 'bold', stroke: 0xffffff, strokeThickness: 3 };
+  const emojiStyle = { fontFamily: 'Arial', fontSize: 44 };
 
-  // === DOM ===
   const $ = id => document.getElementById(id);
   const menuScreen = $('menuScreen'), waitingScreen = $('waitingScreen'), gameScreen = $('gameScreen');
   const nameInput = $('nameInput');
@@ -247,10 +242,20 @@
     if (name) nameInput.value = name.slice(0, 12);
   }
 
+  // === Цвета ===
+  function hexToInt(hex) { return parseInt(hex.replace('#',''), 16); }
+  function lighten(color, percent) {
+    const num = typeof color === 'number' ? color : parseInt(String(color).replace('#',''), 16);
+    let r = Math.min(255, ((num >> 16) & 0xff) + percent);
+    let g = Math.min(255, ((num >> 8) & 0xff) + percent);
+    let b = Math.min(255, (num & 0xff) + percent);
+    return (r << 16) | (g << 8) | b;
+  }
+  function darken(color, percent) { return lighten(color, -percent); }
+
   // === ВЗРЫВ НА ФОНЕ ===
   function createBgExplosion() {
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight / 2;
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
     for (let i = 0; i < 90; i++) {
       const spark = document.createElement('div');
       spark.className = 'bg-spark';
@@ -314,9 +319,7 @@
       cdView.textContent = 'КД: ' + left.toFixed(1);
       cdView.classList.remove('ready');
       document.querySelectorAll('.btn').forEach(b => {
-        if (b.id === 'farmBtn' || b.id === 'wallBtn' || b.id === 'shootBtn') {
-          b.disabled = true; b.classList.add('recharging');
-        }
+        if (b.id === 'farmBtn' || b.id === 'wallBtn' || b.id === 'shootBtn') { b.disabled = true; b.classList.add('recharging'); }
       });
     } else {
       cdView.textContent = 'КД: 0.0';
@@ -370,85 +373,84 @@
   }
 
   // ============================================================
-  // PIXI INIT
+  // PIXI
   // ============================================================
   async function initPixi() {
     app = new PIXI.Application();
-    await app.init({
-      width: VIEW_W,
-      height: VIEW_H,
-      background: 0xffffff,
-      antialias: false,
-      resolution: 1,
-      autoDensity: false,
-    });
+    await app.init({ width: VIEW_W, height: VIEW_H, background: 0xffffff, antialias: true, resolution: 1, autoDensity: false });
     gameCanvasWrap.appendChild(app.canvas);
-
     world = new PIXI.Container();
     app.stage.addChild(world);
 
-    // ParticleContainer для пуль (сотни частиц — 60 FPS)
-    bulletContainer = new PIXI.ParticleContainer({
-      dynamicProperties: { position: true, rotation: true, scale: true, color: true },
-      boundsArea: new PIXI.Rectangle(0, 0, W, H),
-    });
-    world.addChild(bulletContainer);
-
-    // ParticleContainer для искр/частиц
-    particleContainer = new PIXI.ParticleContainer({
-      dynamicProperties: { position: true, scale: true, color: true },
-      boundsArea: new PIXI.Rectangle(0, 0, W, H),
-    });
-    world.addChild(particleContainer);
-
-    // Сетка (один раз рисуем)
+    // Сетка
     const grid = new PIXI.Graphics();
     grid.lineStyle(1, 0xe8e8ec, 1);
     for (let x = 0; x <= W; x += 50) { grid.moveTo(x, 0); grid.lineTo(x, H); }
     for (let y = 0; y <= H; y += 50) { grid.moveTo(0, y); grid.lineTo(W, y); }
     world.addChild(grid);
+    world._grid = grid;
 
-    // Текстуры (белый квадрат 1x1, будем масштабировать)
-    window._whiteTexture = PIXI.Texture.WHITE;
+    zoneGraphics = new PIXI.Graphics();
+    world.addChild(zoneGraphics);
   }
 
-  // === СПРАЙТЫ КУБИКОВ ===
+  // === КУБИК ===
   function createCubeSprite(sid, color) {
     const c = new PIXI.Container();
+    const colorInt = hexToInt(color);
 
-    const shadow = new PIXI.Sprite(PIXI.Texture.WHITE);
-    shadow.tint = 0x000000;
-    shadow.alpha = 0.2;
-    shadow.width = CUBE; shadow.height = CUBE;
-    shadow.x = 4; shadow.y = 4;
+    // тень
+    const shadow = new PIXI.Graphics();
+    shadow.beginFill(0x000000, 0.2);
+    shadow.drawRect(4, 4, CUBE, CUBE);
+    shadow.endFill();
     c.addChild(shadow);
 
-    const body = new PIXI.Sprite(PIXI.Texture.WHITE);
-    body.tint = parseInt(color.replace('#', ''), 16);
-    body.width = CUBE; body.height = CUBE;
+    // тело с градиентом
+    const body = new PIXI.Graphics();
+    const lightColor = lighten(colorInt, 40);
+    const darkColor = darken(colorInt, 30);
+    body.beginFill(darkColor);
+    body.drawRect(0, 0, CUBE, CUBE);
+    body.endFill();
+    body.beginFill(lightColor);
+    body.drawRect(0, 0, CUBE, CUBE / 2);
+    body.endFill();
+    body.beginFill(colorInt);
+    body.drawRect(0, CUBE / 4, CUBE, CUBE / 2);
+    body.endFill();
+    body.lineStyle(2, 0x000000, 0.6);
+    body.drawRect(0, 0, CUBE, CUBE);
     c.addChild(body);
 
-    const border = new PIXI.Graphics();
-    border.lineStyle(2, 0x000000, 0.6);
-    border.drawRect(0, 0, CUBE, CUBE);
-    c.addChild(border);
-
-    // ствол
-    const barrel = new PIXI.Sprite(PIXI.Texture.WHITE);
-    barrel.tint = 0x222222;
-    barrel.width = 22; barrel.height = 10;
-    barrel.x = 10; barrel.y = CUBE / 2 - 5;
-    c.addChild(barrel);
+    // ствол (контейнер, чтобы вращать)
+    const barrelContainer = new PIXI.Container();
+    barrelContainer.x = CUBE / 2;
+    barrelContainer.y = CUBE / 2;
+    const barrel = new PIXI.Graphics();
+    barrel.beginFill(darken(colorInt, 50));
+    barrel.drawRect(0, -5, 22, 10);
+    barrel.endFill();
+    barrel.beginFill(0x222222);
+    barrel.drawRect(18, -6, 6, 12);
+    barrel.endFill();
+    barrelContainer.addChild(barrel);
+    c.addChild(barrelContainer);
 
     // HP bar
-    const hpBg = new PIXI.Sprite(PIXI.Texture.WHITE);
-    hpBg.tint = 0x111111; hpBg.width = 54; hpBg.height = 7;
-    hpBg.x = -2; hpBg.y = -22;
+    const hpBg = new PIXI.Graphics();
+    hpBg.beginFill(0x000000, 0.6);
+    hpBg.drawRect(-2, -22, 58, 11);
+    hpBg.endFill();
+    hpBg.beginFill(0x111111);
+    hpBg.drawRect(0, -20, 54, 7);
+    hpBg.endFill();
     c.addChild(hpBg);
 
-    const hpFg = new PIXI.Sprite(PIXI.Texture.WHITE);
-    hpFg.tint = 0x2ecc71; hpFg.width = 54; hpFg.height = 7;
-    hpFg.x = 0; hpFg.y = -20;
+    const hpFg = new PIXI.Graphics();
+    hpFg.beginFill(0x2ecc71);
+    hpFg.drawRect(0, -20, 54, 7);
+    hpFg.endFill();
     c.addChild(hpFg);
 
     // имя
@@ -457,275 +459,389 @@
     name.y = -26;
     c.addChild(name);
 
+    // щит (шар)
+    const shield = new PIXI.Graphics();
+    shield.beginFill(0x00e0ff, 0.2);
+    shield.drawCircle(0, 0, 40);
+    shield.endFill();
+    shield.lineStyle(2.5, 0x00e0ff, 1);
+    shield.drawCircle(0, 0, 40);
+    shield.visible = false;
+    shield.x = CUBE / 2;
+    shield.y = CUBE / 2;
+    c.addChild(shield);
+
     c.x = 0; c.y = 0;
     world.addChild(c);
 
-    sprites[sid] = { container: c, body, border, barrel, hpBg, hpFg, name, shadow };
+    sprites[sid] = { container: c, body, barrelContainer, barrel, hpBg, hpFg, name, shield, shadow };
   }
 
   function updateCubeSprite(sid, p, isMe) {
     let s = sprites[sid];
-    if (!s) {
-      createCubeSprite(sid, p.color);
-      s = sprites[sid];
-    }
+    if (!s) { createCubeSprite(sid, p.color); s = sprites[sid]; }
     s.container.x = p.x - CUBE / 2;
     s.container.y = p.y - CUBE / 2;
     s.name.text = p.name;
 
-    // HP
     const curHp = isMe ? myHp : (p.hp || 100);
     const ratio = Math.max(0, curHp / 100);
-    s.hpFg.width = 54 * ratio;
-    s.hpFg.tint = ratio > 0.6 ? 0x2ecc71 : (ratio > 0.3 ? 0xf39c12 : 0xe74c3c);
+    s.hpFg.clear();
+    s.hpFg.beginFill(ratio > 0.6 ? 0x2ecc71 : (ratio > 0.3 ? 0xf39c12 : 0xe74c3c));
+    s.hpFg.drawRect(0, -20, 54 * ratio, 7);
+    s.hpFg.endFill();
 
-    // ствол (вращаем контейнер вокруг центра)
     const lvl = p.gun_level || 0;
-    const barrelLen = 22 + lvl * 5;
-    const barrelW = 10 + lvl * 2;
-    s.barrel.width = barrelLen;
-    s.barrel.height = barrelW;
-    s.barrel.y = CUBE / 2 - barrelW / 2;
-
-    // обводка для себя
-    if (isMe) {
-      s.border.clear();
-      s.border.lineStyle(3, 0x000000, 1);
-      s.border.drawRect(0, 0, CUBE, CUBE);
-    }
-
-    // поворот ствола в сторону dir
     const angle = Math.atan2(p.dir.y, p.dir.x);
-    const cx = CUBE / 2, cy = CUBE / 2;
-    const bx = 10 * Math.cos(angle) - 0 * Math.sin(angle) + cx;
-    const by = 10 * Math.sin(angle) + 0 * Math.cos(angle) + cy;
-    s.barrel.x = bx;
-    s.barrel.y = by - barrelW / 2;
-    s.barrel.rotation = angle;
-    // костыль: Pixi не даёт anchor для Sprite без texture, поэтому rotation сдвигает
-    s.barrel.pivot.x = 0;
-    s.barrel.pivot.y = barrelW / 2;
+    s.barrelContainer.rotation = angle;
+    s.barrel.clear();
+    s.barrel.beginFill(darken(hexToInt(p.color), 50));
+    s.barrel.drawRect(0, -5, 22 + lvl * 5, 10 + lvl * 2);
+    s.barrel.endFill();
+    const big = (p.big_bullets_until || 0) > Date.now() / 1000;
+    s.barrel.beginFill(big ? 0xff8800 : (lvl >= 4 ? 0x00e0ff : 0x222222));
+    s.barrel.drawRect(22 + lvl * 5 - 4, -5 - lvl - 1, 6, 10 + lvl * 2 + 2);
+    s.barrel.endFill();
+
+    const shielded = (p.shield_until || 0) > Date.now() / 1000;
+    s.shield.visible = shielded;
+    if (shielded) {
+      const t = Date.now() / 200;
+      s.shield.scale.set(1 + Math.sin(t) * 0.08);
+    }
   }
 
-  // === СПРАЙТЫ СТЕН ===
+  // === СТЕНА ===
+  function createWallSprite(wid, w) {
+    const c = new PIXI.Container();
+    const g = new PIXI.Graphics();
+    g.beginFill(0x000000, 0.2);
+    g.drawRect(3, 3, 50, 50);
+    g.endFill();
+    g.beginFill(0x7a8fb8);
+    g.drawRect(0, 0, 50, 50);
+    g.endFill();
+    g.beginFill(0x4a5f88);
+    g.drawRect(0, 25, 50, 25);
+    g.endFill();
+    g.lineStyle(1, 0x000000, 0.35);
+    g.moveTo(0, 16.6); g.lineTo(50, 16.6);
+    g.moveTo(0, 33.3); g.lineTo(50, 33.3);
+    g.lineStyle(2, 0x2c3e50, 1);
+    g.drawRect(0, 0, 50, 50);
+    c.addChild(g);
+    c.x = w.x - 25; c.y = w.y - 25;
+    world.addChild(c);
+    wallSprites[wid] = { container: c, border: g };
+  }
+
   function updateWallSprite(wid, w) {
-    if (!wallSprites[wid]) {
-      const s = new PIXI.Container();
-      const body = new PIXI.Sprite(PIXI.Texture.WHITE);
-      body.tint = 0x5a6f98; body.width = 50; body.height = 50;
-      s.addChild(body);
-      const border = new PIXI.Graphics();
-      border.lineStyle(2, 0x2c3e50, 1);
-      border.drawRect(0, 0, 50, 50);
-      s.addChild(border);
-      s.x = w.x - 25; s.y = w.y - 25;
-      world.addChild(s);
-      wallSprites[wid] = { container: s, border };
-    }
-    const s = wallSprites[wid];
-    const hpRatio = Math.max(0, w.hp / 4);
-    s.border.clear();
-    const color = hpRatio > 0.5 ? 0x2c3e50 : (hpRatio > 0.25 ? 0xf39c12 : 0xe74c3c);
-    s.border.lineStyle(2, color, 1);
-    s.border.drawRect(0, 0, 50, 50);
+    if (!wallSprites[wid]) createWallSprite(wid, w);
   }
 
-  // === СПРАЙТЫ ФЕРМ ===
-  function updateFarmSprite(fid, f) {
-    if (!farmSprites[fid]) {
-      const s = new PIXI.Container();
-      const body = new PIXI.Sprite(PIXI.Texture.WHITE);
-      body.tint = 0xb8901a; body.width = 44; body.height = 44;
-      s.addChild(body);
-      const border = new PIXI.Graphics();
-      border.lineStyle(2, 0x6a4a0a, 1);
-      border.drawRect(0, 0, 44, 44);
-      s.addChild(border);
-      const wheel = new PIXI.Graphics();
-      wheel.lineStyle(3, 0x8b5a2b, 1);
-      wheel.moveTo(-13, 0); wheel.lineTo(13, 0);
-      wheel.moveTo(0, -13); wheel.lineTo(0, 13);
-      s.addChild(wheel);
-      s.x = f.x - 22; s.y = f.y - 22;
-      world.addChild(s);
-      farmSprites[fid] = { container: s, border, wheel };
+  // === ФЕРМА (мельница) ===
+  function createFarmSprite(fid, f) {
+    const c = new PIXI.Container();
+
+    const g = new PIXI.Graphics();
+    // тень
+    g.beginFill(0x000000, 0.15);
+    g.drawRect(-24, -24, 52, 52);
+    g.endFill();
+    // корпус
+    g.beginFill(0xb8901a);
+    g.drawRect(-22, -22, 44, 44);
+    g.endFill();
+    g.beginFill(0xd4a017);
+    g.drawRect(-22, -22, 44, 22);
+    g.endFill();
+    // обводка
+    g.lineStyle(2.5, 0x6a4a0a, 1);
+    g.drawRect(-22, -22, 44, 44);
+    // дверь
+    g.beginFill(0x4a3005);
+    g.drawRect(-5, 2, 10, 14);
+    g.endFill();
+    // крыша
+    g.beginFill(0x8b0000);
+    g.moveTo(-26, -22); g.lineTo(0, -38); g.lineTo(26, -22); g.closePath();
+    g.endFill();
+    g.lineStyle(2, 0x4a0000, 1);
+    g.moveTo(-26, -22); g.lineTo(0, -38); g.lineTo(26, -22);
+    c.addChild(g);
+
+    // лопасти
+    const wheel = new PIXI.Container();
+    wheel.x = 0; wheel.y = -30;
+    const wheelG = new PIXI.Graphics();
+    wheelG.beginFill(0x8b5a2b);
+    for (let i = 0; i < 4; i++) {
+      wheelG.rotate = i * Math.PI / 2;
+      wheelG.drawRect(0, -3, 26, 6);
     }
+    // проще нарисовать 4 прямоугольника через rotate
+    wheelG.clear();
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2;
+      wheelG.beginFill(0x8b5a2b);
+      wheelG.drawRect(0, -3, 26, 6);
+      wheelG.endFill();
+      // rotate следующего
+      wheelG.rotation = 0; // будет в wheel.rotation
+    }
+    // вместо этого — 4 раза один и тот же, но повёрнутый контейнер
+    wheel.removeChildren();
+    for (let i = 0; i < 4; i++) {
+      const blade = new PIXI.Graphics();
+      blade.beginFill(0x8b5a2b);
+      blade.drawRect(0, -3, 26, 6);
+      blade.endFill();
+      blade.rotation = i * Math.PI / 2;
+      wheel.addChild(blade);
+    }
+    const hub = new PIXI.Graphics();
+    hub.beginFill(0x4a2a0a);
+    hub.drawCircle(0, 0, 5);
+    hub.endFill();
+    wheel.addChild(hub);
+    c.addChild(wheel);
+
+    // HP
+    const hpBg = new PIXI.Graphics();
+    hpBg.beginFill(0x000000, 0.5);
+    hpBg.drawRect(-21, -46, 42, 7);
+    hpBg.endFill();
+    hpBg.beginFill(0x111111);
+    hpBg.drawRect(-20, -45, 40, 5);
+    hpBg.endFill();
+    c.addChild(hpBg);
+    const hpFg = new PIXI.Graphics();
+    hpFg.beginFill(0x2ecc71);
+    hpFg.drawRect(-20, -45, 40, 5);
+    hpFg.endFill();
+    c.addChild(hpFg);
+
+    c.x = f.x; c.y = f.y;
+    world.addChild(c);
+    farmSprites[fid] = { container: c, wheel, hpFg };
+  }
+
+  function updateFarmSprite(fid, f) {
+    if (!farmSprites[fid]) createFarmSprite(fid, f);
     const s = farmSprites[fid];
     s.wheel.rotation += 0.05;
     const hpRatio = Math.max(0, f.hp / 8);
-    s.border.clear();
-    const color = hpRatio > 0.5 ? 0x6a4a0a : (hpRatio > 0.25 ? 0xf39c12 : 0xe74c3c);
-    s.border.lineStyle(2, color, 1);
-    s.border.drawRect(0, 0, 44, 44);
+    s.hpFg.clear();
+    s.hpFg.beginFill(hpRatio > 0.5 ? 0x2ecc71 : 0xe74c3c);
+    s.hpFg.drawRect(-20, -45, 40 * hpRatio, 5);
+    s.hpFg.endFill();
   }
 
-  // === СПРАЙТЫ ЯЩИКОВ ===
+  // === ЯЩИК ===
+  function createCrateSprite(cid, c) {
+    const cont = new PIXI.Container();
+    const g = new PIXI.Graphics();
+    g.beginFill(0x000000, 0.2);
+    g.drawRect(-21, -21, 50, 50);
+    g.endFill();
+    g.beginFill(0xc08040);
+    g.drawRect(-25, -25, 50, 50);
+    g.endFill();
+    g.beginFill(0x7a4a1a);
+    g.drawRect(-25, -25, 25, 25);
+    g.endFill();
+    g.lineStyle(3, 0x4a2a0a, 1);
+    g.drawRect(-25, -25, 50, 50);
+    g.lineStyle(2, 0x3a1a05, 0.7);
+    g.moveTo(-20, -20); g.lineTo(20, 20);
+    g.moveTo(20, -20); g.lineTo(-20, 20);
+    g.beginFill(0x3a1a05);
+    g.drawCircle(-19, -19, 2);
+    g.drawCircle(19, -19, 2);
+    g.drawCircle(-19, 19, 2);
+    g.drawCircle(19, 19, 2);
+    cont.addChild(g);
+
+    const icon = new PIXI.Text('', { fontFamily: 'Arial', fontSize: 22 });
+    icon.anchor.set(0.5);
+    icon.x = 0; icon.y = 0;
+    cont.addChild(icon);
+
+    const hpBg = new PIXI.Graphics();
+    hpBg.beginFill(0x000000, 0.6);
+    hpBg.drawRect(-22, 30, 44, 7);
+    hpBg.endFill();
+    hpBg.beginFill(0x111111);
+    hpBg.drawRect(-21, 31, 42, 5);
+    hpBg.endFill();
+    cont.addChild(hpBg);
+    const hpFg = new PIXI.Graphics();
+    hpFg.beginFill(0x2ecc71);
+    hpFg.drawRect(-21, 31, 42, 5);
+    hpFg.endFill();
+    cont.addChild(hpFg);
+
+    cont.x = c.x; cont.y = c.y;
+    world.addChild(cont);
+    crateSprites[cid] = { container: cont, icon, hpFg };
+  }
+
   function updateCrateSprite(cid, c) {
-    if (!crateSprites[cid]) {
-      const s = new PIXI.Container();
-      const body = new PIXI.Sprite(PIXI.Texture.WHITE);
-      body.tint = 0xa86830; body.width = 50; body.height = 50;
-      s.addChild(body);
-      const border = new PIXI.Graphics();
-      border.lineStyle(3, 0x4a2a0a, 1);
-      border.drawRect(0, 0, 50, 50);
-      s.addChild(border);
-      const icon = new PIXI.Text('', { fontFamily: 'Arial', fontSize: 22 });
-      icon.anchor.set(0.5);
-      icon.x = 25; icon.y = 25;
-      s.addChild(icon);
-      s.x = c.x - 25; s.y = c.y - 25;
-      world.addChild(s);
-      crateSprites[cid] = { container: s, border, icon };
-    }
+    if (!crateSprites[cid]) createCrateSprite(cid, c);
     const s = crateSprites[cid];
     s.icon.text = c.bonus === 'shield' ? '🛡' : '🔵';
     const hpRatio = Math.max(0, c.hp / (c.max_hp || 3));
-    s.border.clear();
-    const color = hpRatio > 0.5 ? 0x2ecc71 : (hpRatio > 0.25 ? 0xf39c12 : 0xe74c3c);
-    s.border.lineStyle(3, color, 1);
-    s.border.drawRect(0, 0, 50, 50);
+    s.hpFg.clear();
+    s.hpFg.beginFill(hpRatio > 0.5 ? 0x2ecc71 : (hpRatio > 0.25 ? 0xf39c12 : 0xe74c3c));
+    s.hpFg.drawRect(-21, 31, 42 * hpRatio, 5);
+    s.hpFg.endFill();
   }
 
-  // === ЧАСТИЦЫ (ParticleContainer) ===
+  // === ЧАСТИЦЫ ===
   function spawnParticles(x, y, color, count = 8) {
     if (particles.length > 300) return;
-    const tint = parseInt(String(color).replace('#', ''), 16);
+    const tint = typeof color === 'number' ? color : hexToInt(color);
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 2 + Math.random() * 4;
-      const p = new PIXI.Particle({
-        texture: PIXI.Texture.WHITE,
-        x, y,
-        scaleX: 0.04, scaleY: 0.04,
-        tint: tint,
-      });
-      particleContainer.addParticle(p);
-      particles.push({ p, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1 });
+      const g = new PIXI.Graphics();
+      g.beginFill(tint);
+      g.drawCircle(0, 0, 3 + Math.random() * 3);
+      g.endFill();
+      g.x = x; g.y = y;
+      world.addChild(g);
+      particles.push({ g, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1 });
     }
   }
 
-  // === ОБНОВЛЕНИЕ ЧАСТИЦ ===
   function updateParticles() {
     for (let i = particles.length - 1; i >= 0; i--) {
       const part = particles[i];
-      part.p.x += part.vx;
-      part.p.y += part.vy;
+      part.g.x += part.vx;
+      part.g.y += part.vy;
       part.vx *= 0.94; part.vy *= 0.94;
       part.life -= 0.03;
-      part.p.scaleX = 0.04 * part.life;
-      part.p.scaleY = 0.04 * part.life;
+      part.g.alpha = part.life;
+      part.g.scale.set(part.life);
       if (part.life <= 0) {
-        particleContainer.removeParticle(part.p);
+        world.removeChild(part.g);
         particles.splice(i, 1);
       }
     }
   }
 
-  // === ПУЛИ (ParticleContainer) ===
+  // === ПУЛИ ===
   function spawnBullet(data, isBig) {
     const count = data.bullets || 1;
     const baseAngle = Math.atan2(data.dir.y, data.dir.x);
     const spread = 0.15;
-    const tint = parseInt(String(data.color).replace('#', ''), 16);
+    const colorInt = hexToInt(data.color);
     for (let i = 0; i < count; i++) {
       const offset = (i - (count - 1) / 2) * spread;
       const a = baseAngle + offset;
-      const size = isBig ? 0.16 : 0.08;
-      const p = new PIXI.Particle({
-        texture: PIXI.Texture.WHITE,
-        x: data.x, y: data.y,
-        scaleX: size, scaleY: size,
-        tint: tint,
-      });
-      bulletContainer.addParticle(p);
+      const g = new PIXI.Container();
+      // свечение
+      const glow = new PIXI.Graphics();
+      glow.beginFill(colorInt, 0.3);
+      glow.drawCircle(0, 0, isBig ? 22 : 14);
+      glow.endFill();
+      g.addChild(glow);
+      // ядро
+      const core = new PIXI.Graphics();
+      core.beginFill(isBig ? 0xffaa33 : (data.pierce ? 0x00e0ff : 0xffffff));
+      core.drawCircle(0, 0, isBig ? 12 : 6);
+      core.endFill();
+      g.addChild(core);
+      const inner = new PIXI.Graphics();
+      inner.beginFill(colorInt);
+      inner.drawCircle(0, 0, isBig ? 7 : 4);
+      inner.endFill();
+      g.addChild(inner);
+      g.x = data.x; g.y = data.y;
+      world.addChild(g);
       bullets.push({
-        p, dx: Math.cos(a), dy: Math.sin(a),
+        g, glow, dx: Math.cos(a), dy: Math.sin(a),
         owner: data.sid, age: 0, dmg: data.dmg || 5,
         pierce: data.pierce, radius: isBig ? 12 : 6,
         big: isBig, hit_targets: [],
       });
     }
-    spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, data.color, isBig ? 14 : 8);
+    spawnParticles(data.x + data.dir.x * 30, data.y + data.dir.y * 30, colorInt, isBig ? 14 : 8);
   }
 
-  // === ОБНОВЛЕНИЕ ПУЛЬ ===
   function updateBullets() {
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
-      b.p.x += b.dx * BULLET_STEP;
-      b.p.y += b.dy * BULLET_STEP;
+      b.g.x += b.dx * BULLET_STEP;
+      b.g.y += b.dy * BULLET_STEP;
       b.age += 0.03;
+      // пульсация
+      const t = Date.now() / 100;
+      b.g.scale.set(1 + Math.sin(t) * 0.1);
 
       let hitSomething = false;
-
-      // стены
       for (const wid in walls) {
         const w = walls[wid];
-        if (Math.abs(w.x - b.p.x) < 25 && Math.abs(w.y - b.p.y) < 25) {
+        if (Math.abs(w.x - b.g.x) < 25 && Math.abs(w.y - b.g.y) < 25) {
           socket.emit('hit_wall', { wall_id: wid });
-          spawnParticles(b.p.x, b.p.y, '#8fa8d8', 5);
+          spawnParticles(b.g.x, b.g.y, 0x8fa8d8, 5);
           if (!b.pierce) hitSomething = true;
           break;
         }
       }
-      // фермы
       if (!hitSomething) {
         for (const fid in farms) {
           const f = farms[fid];
-          if (Math.abs(f.x - b.p.x) < 30 && Math.abs(f.y - b.p.y) < 30) {
+          if (Math.abs(f.x - b.g.x) < 30 && Math.abs(f.y - b.g.y) < 30) {
             socket.emit('hit_farm', { farm_id: fid });
-            spawnParticles(b.p.x, b.p.y, '#d4a017', 5);
+            spawnParticles(b.g.x, b.g.y, 0xd4a017, 5);
             if (!b.pierce) hitSomething = true;
             break;
           }
         }
       }
-      // ящики
       if (!hitSomething) {
         for (const cid in crates) {
           const c = crates[cid];
           if (c.hp <= 0) continue;
-          if (Math.abs(c.x - b.p.x) < 28 && Math.abs(c.y - b.p.y) < 28) {
+          if (Math.abs(c.x - b.g.x) < 28 && Math.abs(c.y - b.g.y) < 28) {
             socket.emit('hit_crate', { crate_id: cid });
-            spawnParticles(b.p.x, b.p.y, '#c08040', 6);
+            spawnParticles(b.g.x, b.g.y, 0xc08040, 6);
             if (!b.pierce) hitSomething = true;
             break;
           }
         }
       }
-      // игроки
       if (!hitSomething) {
         for (const sid in players) {
           if (sid === b.owner) continue;
           if (b.hit_targets.includes(sid)) continue;
           const p = players[sid];
           if (p.alive === false) continue;
-          const dx = p.x - b.p.x, dy = p.y - b.p.y;
+          const dx = p.x - b.g.x, dy = p.y - b.g.y;
           if (dx * dx + dy * dy < (25 + b.radius) * (25 + b.radius)) {
             socket.emit('hit', { target_sid: sid, dmg: b.dmg, killer: b.owner });
             b.hit_targets.push(sid);
-            spawnParticles(b.p.x, b.p.y, '#ff4040', 6);
+            spawnParticles(b.g.x, b.g.y, 0xff4040, 6);
             if (!b.pierce) hitSomething = true;
             break;
           }
         }
       }
 
-      if (hitSomething || b.age >= BULLET_LIFE || b.p.x < 0 || b.p.x > W || b.p.y < 0 || b.p.y > H) {
-        bulletContainer.removeParticle(b.p);
+      if (hitSomething || b.age >= BULLET_LIFE || b.g.x < 0 || b.g.x > W || b.g.y < 0 || b.g.y > H) {
+        // взрыв пули
+        for (let k = 0; k < 4; k++) {
+          spawnParticles(b.g.x, b.g.y, b.big ? 0xffaa33 : 0xffffff, 2);
+        }
+        world.removeChild(b.g);
         bullets.splice(i, 1);
       }
     }
   }
 
-  // === ФОН (зона сжатия) ===
-  let zoneGraphics = null;
+  // === ЗОНА ===
   function drawZone() {
-    if (!zoneGraphics) {
-      zoneGraphics = new PIXI.Graphics();
-      world.addChild(zoneGraphics);
-    }
     zoneGraphics.clear();
     if (zone.active) {
       zoneGraphics.beginFill(0xe74c3c, 0.35);
@@ -784,26 +900,22 @@
       if (data.world_w) W = data.world_w;
       if (data.world_h) H = data.world_h;
       me = players[mySid];
-      if (me) {
-        myCoins = me.coins || 500;
-        myHp = me.hp || 100;
-        myKills = me.kills || 0;
-      }
+      if (me) { myCoins = me.coins || 500; myHp = me.hp || 100; myKills = me.kills || 0; }
       gameStarted = true;
 
-      // Очищаем старые спрайты
+      // очистка
       for (const sid in sprites) { world.removeChild(sprites[sid].container); delete sprites[sid]; }
       for (const wid in wallSprites) { world.removeChild(wallSprites[wid].container); delete wallSprites[wid]; }
       for (const fid in farmSprites) { world.removeChild(farmSprites[fid].container); delete farmSprites[fid]; }
       for (const cid in crateSprites) { world.removeChild(crateSprites[cid].container); delete crateSprites[cid]; }
-      for (const b of bullets) bulletContainer.removeParticle(b.p);
-      for (const pa of particles) particleContainer.removeParticle(pa.p);
+      for (const b of bullets) world.removeChild(b.g);
+      for (const pa of particles) world.removeChild(pa.g);
       bullets = []; particles = []; floatingTexts = []; activeEmotions = [];
 
-      // Создаём кубики
-      for (const sid in players) {
-        updateCubeSprite(sid, players[sid], sid === mySid);
-      }
+      for (const sid in players) updateCubeSprite(sid, players[sid], sid === mySid);
+      for (const wid in walls) updateWallSprite(wid, walls[wid]);
+      for (const fid in farms) updateFarmSprite(fid, farms[fid]);
+      for (const cid in crates) updateCrateSprite(cid, crates[cid]);
 
       updateHUD();
       showScreen('gameScreen');
@@ -813,6 +925,8 @@
 
     socket.on('server_reset', () => {
       gameStarted = false;
+      for (const b of bullets) world.removeChild(b.g);
+      for (const pa of particles) world.removeChild(pa.g);
       bullets = []; particles = [];
       showScreen('waitingScreen');
     });
@@ -853,28 +967,26 @@
       if (p) { p.x = data.x; p.y = data.y; p.dir = data.dir; }
     });
 
-    socket.on('bullet_fired', (data) => {
-      spawnBullet(data, !!data.big);
-    });
+    socket.on('bullet_fired', (data) => { spawnBullet(data, !!data.big); });
 
     socket.on('player_hit', (data) => {
       if (data.sid === mySid) myHp = data.hp;
       else { const p = players[data.sid]; if (p) p.hp = data.hp; }
       const p = players[data.sid];
-      if (p) spawnParticles(p.x, p.y, data.zone ? '#ff2020' : '#ff4040', 8);
+      if (p) spawnParticles(p.x, p.y, data.zone ? 0xff2020 : 0xff4040, 8);
       haptic('hit');
       updateHUD();
     });
 
     socket.on('player_shielded', (data) => {
       const p = players[data.sid];
-      if (p) spawnParticles(p.x, p.y, '#00e0ff', 8);
+      if (p) spawnParticles(p.x, p.y, 0x00e0ff, 8);
       if (data.sid === mySid) haptic('hit');
     });
 
     socket.on('player_died', (data) => {
       const p = players[data.sid];
-      if (p) { p.hp = 0; p.alive = false; spawnParticles(p.x, p.y, p.color, 15); }
+      if (p) { p.hp = 0; p.alive = false; spawnParticles(p.x, p.y, hexToInt(p.color), 15); }
     });
 
     socket.on('wall_placed', (data) => {
@@ -883,9 +995,7 @@
       if (data.my_coins !== undefined) myCoins = data.my_coins;
       updateHUD();
     });
-    socket.on('wall_hit', (data) => {
-      if (walls[data.id]) { walls[data.id].hp = data.hp; updateWallSprite(data.id, walls[data.id]); }
-    });
+    socket.on('wall_hit', (data) => { if (walls[data.id]) walls[data.id].hp = data.hp; });
     socket.on('wall_destroyed', (data) => {
       if (wallSprites[data.id]) { world.removeChild(wallSprites[data.id].container); delete wallSprites[data.id]; }
       delete walls[data.id];
@@ -897,9 +1007,7 @@
       if (data.my_coins !== undefined) myCoins = data.my_coins;
       updateHUD();
     });
-    socket.on('farm_hit', (data) => {
-      if (farms[data.id]) { farms[data.id].hp = data.hp; updateFarmSprite(data.id, farms[data.id]); }
-    });
+    socket.on('farm_hit', (data) => { if (farms[data.id]) farms[data.id].hp = data.hp; });
     socket.on('farm_destroyed', (data) => {
       if (farmSprites[data.id]) { world.removeChild(farmSprites[data.id].container); delete farmSprites[data.id]; }
       delete farms[data.id];
@@ -912,13 +1020,11 @@
       crates[data.id] = { x: data.x, y: data.y, hp: data.hp, max_hp: data.max_hp || 3, bonus: data.bonus };
       updateCrateSprite(data.id, crates[data.id]);
     });
-    socket.on('crate_hit', (data) => {
-      if (crates[data.id]) { crates[data.id].hp = data.hp; updateCrateSprite(data.id, crates[data.id]); }
-    });
+    socket.on('crate_hit', (data) => { if (crates[data.id]) { crates[data.id].hp = data.hp; updateCrateSprite(data.id, crates[data.id]); } });
     socket.on('crate_destroyed', (data) => {
       if (crateSprites[data.id]) { world.removeChild(crateSprites[data.id].container); delete crateSprites[data.id]; }
       delete crates[data.id];
-      spawnParticles(data.x, data.y, '#8b5a2b', 12);
+      spawnParticles(data.x, data.y, 0x8b5a2b, 12);
       if (data.player_sid === mySid) haptic('bonus');
     });
 
@@ -931,29 +1037,16 @@
       activeEmotions.push({ x: data.x, y: data.y - 60, emoji: data.emoji, life: EMOTION_LIFE });
       if (data.sid === mySid) haptic('emotion');
     });
-    socket.on('emotion_cooldown', (data) => {
-      emotionCooldownUntil = Date.now() + (data.left || 0) * 1000;
-      updateEmotionCooldown();
-    });
+    socket.on('emotion_cooldown', (data) => { emotionCooldownUntil = Date.now() + (data.left || 0) * 1000; updateEmotionCooldown(); });
 
     socket.on('game_over', (data) => {
       showWinBanner('🏆 ' + data.winner + '<small>побеждает!</small>');
       setTimeout(() => { winBanner.classList.remove('show'); }, 4000);
     });
 
-    socket.on('error_msg', (data) => {
-      menuStatus.textContent = data.text;
-      waitStatus.textContent = data.text;
-    });
-    socket.on('on_cooldown', () => {
-      haptic('light');
-      cdView.style.color = '#e74c3c';
-      setTimeout(() => { cdView.style.color = ''; }, 250);
-    });
-    socket.on('disconnect', () => {
-      menuStatus.textContent = 'Отключён';
-      showScreen('menuScreen');
-    });
+    socket.on('error_msg', (data) => { menuStatus.textContent = data.text; waitStatus.textContent = data.text; });
+    socket.on('on_cooldown', () => { haptic('light'); cdView.style.color = '#e74c3c'; setTimeout(() => { cdView.style.color = ''; }, 250); });
+    socket.on('disconnect', () => { menuStatus.textContent = 'Отключён'; showScreen('menuScreen'); });
   }
 
   function updateHUD() {
@@ -963,7 +1056,6 @@
     killsView.textContent = myKills;
   }
 
-  // === УПРАВЛЕНИЕ ===
   playBtn.addEventListener('click', () => {
     const name = nameInput.value.trim();
     if (!name) { menuStatus.textContent = 'Введи имя'; return; }
@@ -994,29 +1086,19 @@
   });
 
   function move(dir) {
-    if (moving || !me || myHp <= 0 || !canAct() || !gameStarted) {
-      if (!canAct()) haptic('light');
-      return;
-    }
+    if (moving || !me || myHp <= 0 || !canAct() || !gameStarted) { if (!canAct()) haptic('light'); return; }
     haptic('light');
-    lastAction = performance.now();
-    updateCD();
+    lastAction = performance.now(); updateCD();
     moving = true;
     const dirs = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
-    const d = dirs[dir];
-    me.dir = d;
+    const d = dirs[dir]; me.dir = d;
     const tx = Math.max(25, Math.min(W - 25, me.x + d.x * STEP));
     const ty = Math.max(25, Math.min(H - 25, me.y + d.y * STEP));
-    const sx = me.x, sy = me.y;
-    const dx = tx - sx, dy = ty - sy;
+    const sx = me.x, sy = me.y; const dx = tx - sx, dy = ty - sy;
     let i = 0;
     function step() {
       i++;
-      if (i > 6) {
-        me.x = tx; me.y = ty; moving = false;
-        socket.emit('move', { x: me.x, y: me.y, dir: me.dir });
-        return;
-      }
+      if (i > 6) { me.x = tx; me.y = ty; moving = false; socket.emit('move', { x: me.x, y: me.y, dir: me.dir }); return; }
       const t = i / 6;
       me.x = sx + dx * t; me.y = sy + dy * t;
       requestAnimationFrame(step);
@@ -1024,32 +1106,11 @@
     step();
   }
 
-  document.querySelectorAll('.btn').forEach(btn => {
-    if (btn.dataset.dir) btn.addEventListener('click', () => move(btn.dataset.dir));
-  });
-  $('shootBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('shot');
-    lastAction = performance.now(); updateCD();
-    socket.emit('shoot', {});
-  });
-  $('wallBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('light');
-    lastAction = performance.now(); updateCD();
-    socket.emit('place_wall', {});
-  });
-  $('farmBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; }
-    haptic('light');
-    lastAction = performance.now(); updateCD();
-    socket.emit('place_farm', {});
-  });
-  $('gunBtn').addEventListener('click', () => {
-    if (!me || myHp <= 0 || !gameStarted) return;
-    haptic('light');
-    socket.emit('upgrade_gun', {});
-  });
+  document.querySelectorAll('.btn').forEach(btn => { if (btn.dataset.dir) btn.addEventListener('click', () => move(btn.dataset.dir)); });
+  $('shootBtn').addEventListener('click', () => { if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; } haptic('shot'); lastAction = performance.now(); updateCD(); socket.emit('shoot', {}); });
+  $('wallBtn').addEventListener('click', () => { if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; } haptic('light'); lastAction = performance.now(); updateCD(); socket.emit('place_wall', {}); });
+  $('farmBtn').addEventListener('click', () => { if (!me || myHp <= 0 || !canAct() || !gameStarted) { haptic('light'); return; } haptic('light'); lastAction = performance.now(); updateCD(); socket.emit('place_farm', {}); });
+  $('gunBtn').addEventListener('click', () => { if (!me || myHp <= 0 || !gameStarted) return; haptic('light'); socket.emit('upgrade_gun', {}); });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowUp') move('up');
@@ -1061,22 +1122,20 @@
     else if (e.key === 'q' || e.key === 'Q') { $('farmBtn').click(); }
   });
 
-  // === ГЛАВНЫЙ ЦИКЛ (Pixi ticker) ===
+  // === ГЛАВНЫЙ ЦИКЛ ===
   function gameLoop() {
     if (!app) return;
 
-    // Пули
     if (gameStarted) updateBullets();
-
-    // Частицы
     updateParticles();
 
-    // Обновление спрайтов игроков
     for (const sid in players) {
       if (sprites[sid]) updateCubeSprite(sid, players[sid], sid === mySid);
     }
+    for (const fid in farms) {
+      if (farmSprites[fid]) farmSprites[fid].wheel.rotation += 0.05;
+    }
 
-    // Камера
     if (me) {
       const targetCamX = me.x - VIEW_W / 2;
       const targetCamY = me.y - VIEW_H / 2;
@@ -1088,14 +1147,13 @@
     world.x = -cameraX;
     world.y = -cameraY;
 
-    // Зона
     drawZone();
 
-    // Эмоции (просто через Text, мало их)
+    // эмоции
     for (let i = activeEmotions.length - 1; i >= 0; i--) {
       const e = activeEmotions[i];
       if (!e._sprite) {
-        e._sprite = new PIXI.Text(e.emoji, { fontFamily: 'Arial', fontSize: 48 });
+        e._sprite = new PIXI.Text(e.emoji, emojiStyle);
         e._sprite.anchor.set(0.5);
         e._sprite.x = e.x; e._sprite.y = e.y;
         world.addChild(e._sprite);
@@ -1103,11 +1161,11 @@
       e.life -= 0.02;
       e._sprite.alpha = Math.min(1, e.life);
       e._sprite.y -= 0.5;
+      e._sprite.rotation += 0.05;
       if (e.life <= 0) { world.removeChild(e._sprite); activeEmotions.splice(i, 1); }
     }
   }
 
-  // === СТАРТ ===
   (async () => {
     await initPixi();
     app.ticker.add(gameLoop);
