@@ -1,5 +1,5 @@
 from flask import Flask, send_from_directory, request
-from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_socketio import SocketIO, emit, join_room
 import os
 import random
 import string
@@ -248,8 +248,13 @@ def on_join_server(data):
         return
 
     if GAME["started"]:
-        emit('error_msg', {"text": "Игра уже идёт. Подожди следующую."})
-        return
+        # если игра идёт, но все мертвы — сбросим
+        alive = [s for s, p in GAME["players"].items() if p["hp"] > 0]
+        if len(alive) == 0 and len(GAME["players"]) == 0:
+            reset_game()
+        else:
+            emit('error_msg', {"text": "Игра уже идёт. Подожди следующую."})
+            return
 
     if len(GAME["players"]) >= MAX_PLAYERS:
         emit('error_msg', {"text": "Сервер полон (6/6)"})
@@ -285,18 +290,21 @@ def on_toggle_ready(data):
 
 
 def check_countdown():
-    if GAME["started"] or GAME["countdown_active"]:
+    if GAME["started"]:
         return
+    if GAME["countdown_active"]:
+        return  # уже идёт таймер
     if len(GAME["players"]) < MIN_PLAYERS:
         return
 
     GAME["countdown_active"] = True
     GAME["countdown_started_at"] = time.time()
-    broadcast_player_list()
 
+    # если набралось максимум — таймер 5 секунд
     if len(GAME["players"]) >= MAX_PLAYERS:
         GAME["countdown_started_at"] = time.time() - (COUNTDOWN_SECONDS - 5)
 
+    broadcast_player_list()
     socketio.start_background_task(countdown_loop)
 
 
@@ -304,6 +312,8 @@ def countdown_loop():
     while GAME.get("countdown_active"):
         socketio.sleep(1)
         if not GAME["countdown_active"]:
+            return
+        if GAME["started"]:
             return
         if len(GAME["players"]) < MIN_PLAYERS:
             GAME["countdown_active"] = False
@@ -316,13 +326,18 @@ def countdown_loop():
 
         if left <= 0:
             GAME["countdown_active"] = False
-            start_game()
+            try:
+                start_game()
+            except Exception as e:
+                print("START_GAME ERROR:", e)
             return
 
         broadcast_player_list()
 
 
 def start_game():
+    if GAME["started"]:
+        return
     players = GAME["players"]
     if len(players) < MIN_PLAYERS:
         return
@@ -345,6 +360,7 @@ def start_game():
         p["shield_until"] = 0
         p["big_bullets_until"] = 0
         p["last_zone_damage"] = 0
+        p["alive"] = True
 
     GAME["crates"] = {}
     GAME["crate_id"] = 0
@@ -873,6 +889,10 @@ def on_disconnect():
             GAME["countdown_active"] = False
             GAME["countdown_started_at"] = 0
             broadcast_player_list()
+        # если все вышли — сброс
+        if len(GAME["players"]) == 0:
+            reset_game()
+            socketio.server.emit('server_reset', {}, room=SERVER_CODE, namespace='/')
 
 
 if __name__ == '__main__':
